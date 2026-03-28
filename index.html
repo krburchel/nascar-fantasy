@@ -628,6 +628,7 @@ function renderTab(tab){
 
 /* ── SCORING ── */
 function calcScore(pts,won){return(parseInt(pts)||0)+(won?10:0);}
+function activeDrivers(){return DRIVERS.filter(d=>!d.retired);}
 function usedDrivers(playerName, scope){
   // scope: 'regular' = all regular season races
   //        'postseason' = only postseason races
@@ -815,7 +816,7 @@ function renderPicks(){
     section.innerHTML=`<div class="pick-form"><div class="pick-race">${race}</div>${modeNote}
       <select id="pick-driver">
         <option value="">— Select your driver —</option>
-        ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const isUsed=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${myPick===val?'selected':''} ${isUsed?'disabled':''}>${isUsed?'✕ ':''}${lbl}${isUsed?' (used)':''}</option>`;}).join('')}
+        ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const isUsed=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${myPick===val?'selected':''} ${isUsed?'disabled':''}>${isUsed?'✕ ':''}${lbl}${isUsed?' (used)':''}</option>`;}).join('')}
       </select>
       <button class="btn btn-primary" onclick="savePick()">Lock In Pick</button>
       ${myPick?`<div class="text-muted text-center" style="font-size:13px">Current: <strong>${myPick}</strong></div>`:''}
@@ -855,7 +856,7 @@ function populateWinnerDropdown(selId){
   if(!sel)return;
   const cur=sel.value;
   sel.innerHTML='<option value="">— select —</option>'+
-    [...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${cur===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('');
+    [...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${cur===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('');
 }
 function renderResultInputs(){
   const inputs=document.getElementById('results-player-inputs');
@@ -868,7 +869,7 @@ function renderResultInputs(){
       ?`<div style="margin-bottom:10px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver picked</label>
           <select id="rdrv-${pid}" onchange="updatePreview('${pid}')">
             <option value="">— select driver —</option>
-            ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const wu=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${wu?'disabled':''}>${wu?'✕ ':''}${lbl}${wu?' (used)':''}</option>`;}).join('')}
+            ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const wu=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${wu?'disabled':''}>${wu?'✕ ':''}${lbl}${wu?' (used)':''}</option>`;}).join('')}
           </select></div>`
       :`<div class="fast-player-driver">${pick||'No pick set'}</div>`;
     return`<div class="fast-player">
@@ -1090,7 +1091,7 @@ function renderHistory(){
       }).join('')
     :'<div class="text-muted text-center">No history yet</div>';
   const sl=document.getElementById('history-seasons-list');
-  const allSeasons=[...state.pastSeasons].reverse();
+  const allSeasons=[...state.pastSeasons].sort((a,b)=>String(b.year).localeCompare(String(a.year),undefined,{numeric:true}));
   sl.innerHTML=allSeasons.map((season,ri)=>{
     const idx=state.pastSeasons.length-1-ri;
     const pts=seasonTotals(season);
@@ -1103,7 +1104,7 @@ function renderHistory(){
     return`<div class="season-card">
       <div class="season-header" onclick="toggleSeason('sbd-${idx}')">
         <div class="season-year">${season.year}</div>
-        <div class="season-meta"><div class="season-winner">${top3[0]?top3[0][0]:'—'}</div><div style="font-size:11px;color:var(--text3)">${raceCount} race${raceCount!==1?'s':''}</div></div>
+        <div class="season-meta"><div class="season-winner">${top3[0]?top3[0][0]:'—'}</div></div>
       </div>
       <div class="season-body" id="sbd-${idx}">
         <div class="season-podium">
@@ -1317,11 +1318,16 @@ function addPsStandingRow(name=''){
   const id=psStandingCount;
   const el=document.createElement('div');
   el.id='ps-standing-row-'+id;
-  el.style.cssText='display:grid;grid-template-columns:1fr 100px auto;gap:8px;align-items:center;margin-bottom:8px;';
+  el.style.cssText='background:var(--surface2);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px;';
   el.innerHTML=`
-    <input type="text" placeholder="Player name" value="${name}" id="ps-sname-${id}" style="font-size:14px;padding:10px 12px;" autocapitalize="words">
-    <input type="number" min="0" placeholder="pts" id="ps-spts-${id}" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center;padding:8px;">
-    <button onclick="document.getElementById('ps-standing-row-${id}').remove()" style="padding:8px 10px;border-radius:var(--r-sm);background:none;border:1px solid rgba(232,74,74,.3);color:var(--danger);font-size:13px;cursor:pointer;white-space:nowrap;">✕</button>`;
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <input type="text" placeholder="Player name" value="${name}" id="ps-sname-${id}" style="font-size:15px;font-weight:600;padding:6px 10px;flex:1;margin-right:8px;" autocapitalize="words">
+      <button onclick="document.getElementById('ps-standing-row-${id}').remove()" style="font-size:12px;color:var(--danger);background:none;border:1px solid rgba(232,74,74,.3);border-radius:6px;cursor:pointer;padding:4px 10px;white-space:nowrap;">Remove</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);white-space:nowrap;">Final pts</label>
+      <input type="number" min="0" placeholder="0" id="ps-spts-${id}" inputmode="numeric" style="font-size:22px;font-weight:700;text-align:center;padding:6px;flex:1;">
+    </div>`;
   document.getElementById('ps-standings-rows').appendChild(el);
 }
 function cancelPastSeason(){
@@ -1340,7 +1346,7 @@ function renderPsPlayerRows(){
       <div style="margin-bottom:6px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver</label>
         <select id="${pid}-drv">
           <option value="">— select —</option>
-          ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}">${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+          ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}">${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
         </select>
       </div>
       <div style="margin-top:4px;display:flex;gap:8px;align-items:flex-end;">
@@ -1446,7 +1452,7 @@ function renderEsRacesList(){
         <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">🏆 Winning Driver</label>
           <select id="esr-wdrv-${ri}" style="font-size:13px;padding:8px 10px;">
             <option value="">— none —</option>
-            ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${r.winnerDriver===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+            ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${r.winnerDriver===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
           </select></div>
         <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Winner Pts</label>
           <input type="number" min="0" value="${r.winnerPts||''}" id="esr-wpts-${ri}" placeholder="0" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center;"></div>
@@ -1457,7 +1463,7 @@ function renderEsRacesList(){
           <div style="font-size:13px;font-weight:500;">${e.player}</div>
           <div><select id="esr-drv-${ri}-${ei}" style="font-size:12px;padding:6px 8px;">
             <option value="">—</option>
-            ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${e.driver===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+            ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${e.driver===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
           </select></div>
           <div><input type="number" min="0" value="${e.pts||0}" id="esr-pts-${ri}-${ei}" inputmode="numeric" style="font-size:16px;font-weight:700;text-align:center;padding:6px 8px;"></div>
         </div>`).join('')}
@@ -1480,7 +1486,7 @@ function renderEsPlayerRows(){
       <div style="margin-bottom:6px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver</label>
         <select id="${pid}-drv">
           <option value="">— select —</option>
-          ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}">${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+          ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}">${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
         </select>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-end;">
@@ -1748,7 +1754,7 @@ function importCsv(){
 function renderDriverList(){
   const el=document.getElementById('driver-mgmt-list');
   if(!el)return;
-  const sorted=[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b)));
+  const sorted=[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b)));
   el.innerHTML=sorted.map((d,i)=>{
     const globalIdx=DRIVERS.findIndex(x=>dName(x)===dName(d));
     const esc=dName(d).replace(/'/g,"\'");
@@ -1821,6 +1827,20 @@ function removeDriver(name){
   state.drivers=DRIVERS;
   saveState();renderDriverList();toast(`Removed ${name}`);
 }
+function retireDriver(name){
+  const d=DRIVERS.find(d=>dName(d)===name);
+  if(!d)return;
+  d.retired=true;
+  state.drivers=DRIVERS;
+  saveState();renderDriverList();toast(`${name} retired`);
+}
+function unretireDriver(name){
+  const d=DRIVERS.find(d=>dName(d)===name);
+  if(!d)return;
+  d.retired=false;
+  state.drivers=DRIVERS;
+  saveState();renderDriverList();toast(`${name} unretired`);
+}
 
 /* ── ADMIN ── */
 function renderAdmin(){
@@ -1868,7 +1888,7 @@ function renderAdminPicks(){
       <div style="display:flex;gap:8px;align-items:center;">
         <select id="${pid}-sel" style="flex:1;font-size:13px;padding:8px 10px;">
           <option value="">— select driver —</option>
-          ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{
+          ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{
             const isUsed=used.has(dName(d));
             const val=dName(d);
             const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);
@@ -1962,7 +1982,7 @@ window.toggleSeason=toggleSeason; window.showRaceDetail=showRaceDetail;
 window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEditSeason=cancelEditSeason; window.handleCsvImport=handleCsvImport; window.cancelCsvImport=cancelCsvImport; window.confirmCsvImport=confirmCsvImport; window.startCsvImport=startCsvImport; window.cancelCsvImport=cancelCsvImport; window.importCsv=importCsv; window.saveEditSeason=saveEditSeason; window.esAddRace=esAddRace; window.deleteSeasonRace=deleteSeasonRace; window.startPastSeason=startPastSeason;
 window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace; window.addPsStandingRow=addPsStandingRow;
 window.savePastSeason=savePastSeason; window.addDriver=addDriver;
-window.removeDriver=removeDriver; window.toggleDriverEdit=toggleDriverEdit; window.saveDriverEdit=saveDriverEdit; window.addPlayer=addPlayer;
+window.removeDriver=removeDriver; window.retireDriver=retireDriver; window.unretireDriver=unretireDriver; window.toggleDriverEdit=toggleDriverEdit; window.saveDriverEdit=saveDriverEdit; window.addPlayer=addPlayer;
 function setPickForPlayer(playerName, pid){
   const sel=document.getElementById(pid+'-sel');
   if(!sel||!sel.value){toast('Select a driver first');return;}
