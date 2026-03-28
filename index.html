@@ -1093,7 +1093,7 @@ function renderHistory(){
   const sl=document.getElementById('history-seasons-list');
   const allSeasons=[...state.pastSeasons].sort((a,b)=>String(b.year).localeCompare(String(a.year),undefined,{numeric:true}));
   sl.innerHTML=allSeasons.map((season,ri)=>{
-    const idx=state.pastSeasons.length-1-ri;
+    const idx=state.pastSeasons.indexOf(season);
     const pts=seasonTotals(season);
     const regPtsH=seasonRegularTotals(season);
     const hasPlayoffsH=(season.races||[]).some(r=>r.raceType==='postseason'||r.raceType==='final')||(Object.keys(season.playoffBonuses||{}).length>0);
