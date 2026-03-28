@@ -811,9 +811,10 @@ function renderCountdown(){
   const track=state.nextTrack||'';
   const isLocked=dl&&new Date()>=dl;
   const noPick=!state.picks[currentUser.name];
-  let h=`<div class="countdown-label">${isLocked?'Picks locked for':'Picks close in'}</div><div class="countdown-race">${race}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}`;
+  const cdNetwork=state.schedule&&state.schedule[0]&&state.schedule[0].network?state.schedule[0].network:'';
+  let h=`<div class="countdown-label">${isLocked?'Picks locked for':'Picks close in'}</div><div class="countdown-race" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${race}${cdNetwork?tvNetworkBadge(cdNetwork):''}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}`;
   if(!dl){
-    h=`<div class="countdown-label">Picks window</div><div class="countdown-race">${race}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}<div class="cd-open">Open — no deadline set</div>`;
+    h=`<div class="countdown-label">Picks window</div><div class="countdown-race" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${race}${cdNetwork?tvNetworkBadge(cdNetwork):''}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}<div class="cd-open">Open — no deadline set</div>`;
   } else if(isLocked){
     h+=`<div class="cd-locked">LOCKED</div>`;
   } else {
