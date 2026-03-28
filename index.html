@@ -408,6 +408,11 @@ select option:disabled{color:var(--text3);}
       </div>
       <button class="btn btn-primary" onclick="saveRaceSetup()">Save</button>
     </div>
+    <div class="card">
+      <div class="card-title">Set Player Picks</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override or set a pick on behalf of any player for the current race.</div>
+      <div id="admin-picks-list"></div>
+    </div>
   </div>
 
   <div class="bottom-nav">
@@ -507,7 +512,7 @@ function defaultState(){
   return{
     players:[{name:'Commissioner',password:'admin',role:'commissioner'}],
     nextRace:'',nextTrack:'',deadline:'',playoffMode:false,
-    picks:{},races:[],pastSeasons:[],
+    picks:{},races:[],pastSeasons:[],playoffBonuses:{},
     drivers:[...DEFAULT_DRIVERS]
   };
 }
@@ -534,6 +539,7 @@ async function initFirestore(){
     if(!data.drivers) data.drivers=[...DEFAULT_DRIVERS];
     data.drivers = data.drivers.map(d=>typeof d==='string'?{name:d,number:''}:d);
     if(!data.picks) data.picks={};
+  if(!data.playoffBonuses) data.playoffBonuses={};
     if(!data.races) data.races=[];
     state = data;
     DRIVERS = state.drivers;
@@ -655,10 +661,31 @@ function currentRaceMode(){
   return state.nextRaceType||'regular';
 }
 function totals(){
+  // Regular season: only regular races
   const pts={};
   state.players.forEach(p=>pts[p.name]=0);
-  state.races.forEach(r=>{(r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});});
+  state.races.forEach(r=>{
+    if((r.raceType||'regular')==='regular')
+      (r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});
+  });
   return pts;
+}
+function playoffTotals(){
+  // Playoff: bonus + postseason + final races
+  const pts={};
+  state.players.forEach(p=>pts[p.name]=(state.playoffBonuses&&state.playoffBonuses[p.name])||0);
+  state.races.forEach(r=>{
+    const rt=r.raceType||'regular';
+    if(rt==='postseason'||rt==='final')
+      (r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});
+  });
+  return pts;
+}
+function hasPlayoffRaces(){
+  return state.races.some(r=>r.raceType==='postseason'||r.raceType==='final');
+}
+function isPlayoffMode(){
+  return hasPlayoffRaces()||(Object.keys(state.playoffBonuses||{}).length>0);
 }
 
 /* ── CHAMPION MAP ── */
@@ -677,21 +704,34 @@ function championMap(){
 }
 function seasonTotals(season){
   const pts={};
-  (season.players||[]).forEach(p=>pts[p]=0);
+  (season.players||[]).forEach(p=>pts[p]=(season.playoffBonuses&&season.playoffBonuses[p])||0);
   (season.races||[]).forEach(r=>{(r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});});
+  return pts;
+}
+function seasonRegularTotals(season){
+  const pts={};
+  (season.players||[]).forEach(p=>pts[p]=0);
+  (season.races||[]).forEach(r=>{
+    if((r.raceType||'regular')==='regular')
+      (r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});
+  });
   return pts;
 }
 
 /* ── LEADERBOARD ── */
 function renderLeaderboard(){
   renderCountdown();startCountdown();
-  const pts=totals();
+  const inPlayoffs=isPlayoffMode();
+  const pts=inPlayoffs?playoffTotals():totals();
+  const regPts=totals();
   const champMap=championMap();
   const sorted=[...state.players].sort((a,b)=>(pts[b.name]||0)-(pts[a.name]||0));
   const sl=document.getElementById('standings-list');
-  // Show closed badge on leaderboard if season is closed
   const slCard=document.querySelector('#tab-leaderboard .card:nth-child(2) .card-title');
-  if(slCard)slCard.innerHTML='Season Standings'+(state.seasonClosed?' <span class="pill pill-danger" style="font-size:10px">Closed</span>':'');
+  const standingLabel=inPlayoffs
+    ?'Playoff Standings <span class="pill pill-gold" style="font-size:10px">Playoffs</span>'
+    :'Season Standings'+(state.seasonClosed?' <span class="pill pill-danger" style="font-size:10px">Closed</span>':'');
+  if(slCard)slCard.innerHTML=standingLabel;
   sl.innerHTML=sorted.length?sorted.map((p,i)=>{
     const rc=i===0?'p1':i===1?'p2':i===2?'p3':'';
     const pickName=state.picks[p.name]||'—';
@@ -700,7 +740,10 @@ function renderLeaderboard(){
     const role=p.role==='commissioner'?' <span class="pill pill-info">Comm</span>':'';
     const champs=champMap[p.name]||[];
     const trophies=champs.map(y=>`<span class="champ-badge">🏆 ${y}</span>`).join('');
-    return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}${role}</div><div class="standing-driver">${pick}</div>${trophies?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophies}</div>`:''}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
+    const bonus=inPlayoffs&&state.playoffBonuses[p.name]?`<span style="font-size:11px;color:var(--text2)"> (+${state.playoffBonuses[p.name]} bonus)</span>`:'';
+    const subPts=inPlayoffs?`<div style="font-size:11px;color:var(--text2)">Reg season: ${regPts[p.name]||0} pts</div>`:'';
+    const trophyHtml=trophies?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophies}</div>`:'';
+    return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}${role}</div><div class="standing-driver">${pick}${bonus}</div>${subPts}${trophyHtml}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
   }).join(''):'<p class="text-muted text-center">Add players in Admin to get started</p>';
   const lrc=document.getElementById('last-race-card');
   if(state.races.length){
@@ -923,33 +966,94 @@ function deleteRace(idx){
 function renderSeasonStatus(){
   const el=document.getElementById('season-status-body');
   if(!el)return;
-  const isClosed=state.seasonClosed===true;
-  const raceCount=state.races.length;
+  const regRaces=state.races.filter(r=>(r.raceType||'regular')==='regular');
+  const inPlayoffs=isPlayoffMode();
   const hasFinal=state.races.some(r=>r.raceType==='final');
-  if(isClosed){
+  const bonusSet=Object.keys(state.playoffBonuses||{}).length>0;
+
+  if(state.seasonClosed){
     el.innerHTML=`<div class="pill pill-danger" style="display:inline-block;margin-bottom:10px;font-size:12px;">Season Closed</div>
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">This season is closed. Open a new season to start fresh.</p>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Season is over. Start a new season when ready.</p>
       <button class="btn btn-primary" onclick="openNewSeason()">Open New Season</button>`;
-  } else {
-    el.innerHTML=`<div style="font-size:13px;color:var(--text2);margin-bottom:12px;">${raceCount} race${raceCount!==1?'s':''} recorded${hasFinal?' · Final race logged':''}</div>
-      <button class="btn" style="background:var(--danger);color:#fff;font-size:16px;" onclick="confirmCloseSeason()">Close Season</button>
-      <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:center">Closing archives this season to History and resets for a new one</div>`;
+    return;
   }
+
+  // Phase 1: Regular season active — show close regular season button
+  if(!inPlayoffs){
+    const regPts=totals();
+    const sorted=[...state.players].sort((a,b)=>(regPts[b.name]||0)-(regPts[a.name]||0));
+    el.innerHTML=`<div style="font-size:13px;color:var(--text2);margin-bottom:12px;">${regRaces.length} regular season race${regRaces.length!==1?'s':''} recorded</div>
+      <button class="btn" style="background:var(--accent);color:#0a0a0a;font-size:16px;font-family:var(--font-display);font-weight:700;" onclick="startCloseRegularSeason()">Close Regular Season & Set Playoff Bonuses</button>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:center">Archives regular season and opens the playoff bonus setup</div>`;
+    return;
+  }
+
+  // Phase 2: Playoffs active — show close full season
+  el.innerHTML=`<div class="pill pill-gold" style="display:inline-block;margin-bottom:10px;font-size:12px;">Playoffs Active</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:12px;">${state.races.filter(r=>r.raceType==='postseason'||r.raceType==='final').length} playoff race${state.races.filter(r=>r.raceType==='postseason'||r.raceType==='final').length!==1?'s':''} recorded${hasFinal?' · Final race logged':''}</div>
+    <button class="btn" style="background:var(--danger);color:#fff;font-size:16px;" onclick="confirmCloseSeason()">Close Full Season</button>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:center">Archives everything to History and resets for next season</div>`;
 }
+
+function startCloseRegularSeason(){
+  const regPts=totals();
+  const sorted=[...state.players].sort((a,b)=>(regPts[b.name]||0)-(regPts[a.name]||0));
+  const el=document.getElementById('season-status-body');
+  // Build bonus input form sorted by regular season finish
+  const rows=sorted.map((p,i)=>`
+    <div style="display:grid;grid-template-columns:1fr auto 100px;gap:8px;align-items:center;margin-bottom:8px;">
+      <div><span style="font-family:var(--font-display);font-size:18px;font-weight:700;color:${i===0?'var(--accent)':i===1?'#aaa':i===2?'#c4845a':'var(--text2)'}">${i+1}.</span> <span style="font-weight:600">${p.name}</span></div>
+      <div style="font-size:13px;color:var(--text2)">${regPts[p.name]||0} pts</div>
+      <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:2px">Bonus</label>
+        <input type="number" min="0" id="bonus-${p.name.replace(/\s+/g,'_')}" placeholder="0" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center;padding:6px 8px;width:100%"></div>
+    </div>`).join('');
+  el.innerHTML=`
+    <div style="font-size:13px;color:var(--text2);margin-bottom:14px;">Set playoff seeding bonus points for each player based on their regular season finish:</div>
+    ${rows}
+    <button class="btn btn-primary" onclick="savePlayoffBonuses()" style="margin-top:6px">Save Bonuses & Start Playoffs</button>
+    <button class="btn btn-ghost" onclick="renderSeasonStatus()" style="margin-top:8px">Cancel</button>`;
+}
+
+function savePlayoffBonuses(){
+  const regPts=totals();
+  const sorted=[...state.players].sort((a,b)=>(regPts[b.name]||0)-(regPts[a.name]||0));
+  const bonuses={};
+  sorted.forEach(p=>{
+    const pid=p.name.replace(/\s+/g,'_');
+    bonuses[p.name]=parseInt(document.getElementById('bonus-'+pid)?.value)||0;
+  });
+  state.playoffBonuses=bonuses;
+  // Archive regular season races separately for history reference
+  if(!state.regularSeasonArchive) state.regularSeasonArchive=[];
+  state.regularSeasonArchive=[...state.races.filter(r=>(r.raceType||'regular')==='regular')];
+  saveState();
+  toast('Playoff bonuses saved — playoffs started!');
+  renderSeasonStatus();renderLeaderboard();
+}
+
 function confirmCloseSeason(){
-  if(!confirm('Close this season? It will be archived to History and the current standings will reset.'))return;
+  if(!confirm('Close the full season? Everything will be archived to History.'))return;
   closeSeason();
 }
 function closeSeason(){
   const playerNames=state.players.map(p=>p.name);
   const year=new Date().getFullYear().toString();
-  state.pastSeasons.push({year,players:playerNames,races:[...state.races],closed:true});
+  // Build combined season with bonus info
+  const regRaces=state.regularSeasonArchive||state.races.filter(r=>(r.raceType||'regular')==='regular');
+  const playoffRaces=state.races.filter(r=>r.raceType==='postseason'||r.raceType==='final');
+  state.pastSeasons.push({
+    year, players:playerNames,
+    races:[...regRaces,...playoffRaces],
+    playoffBonuses:{...(state.playoffBonuses||{})},
+    closed:true
+  });
   state.races=[];state.picks={};state.nextRace='';state.nextTrack='';
   state.deadline='';state.seasonClosed=false;
+  state.playoffBonuses={};state.regularSeasonArchive=[];
   saveState();toast('Season closed and archived');renderResults();renderLeaderboard();
 }
 function openNewSeason(){
-  state.seasonClosed=false;
+  state.seasonClosed=false;state.playoffBonuses={};state.regularSeasonArchive=[];
   state.races=[];state.picks={};state.nextRace='';state.nextTrack='';state.deadline='';
   saveState();toast('New season started');renderResults();renderLeaderboard();
 }
@@ -1655,6 +1759,35 @@ function renderAdmin(){
   const tzLabel=document.getElementById('admin-tz-label');
   if(tzLabel)tzLabel.textContent='('+Intl.DateTimeFormat().resolvedOptions().timeZone+')';
   if(pm)pm.value=state.nextRaceType||'regular';
+  renderAdminPicks();
+}
+function renderAdminPicks(){
+  const el=document.getElementById('admin-picks-list');
+  if(!el)return;
+  const raceMode=currentRaceMode();
+  el.innerHTML=state.players.map(p=>{
+    const pid='admpick_'+p.name.replace(/\s+/g,'_');
+    const currentPick=state.picks[p.name]||'';
+    const used=raceMode==='final'?new Set():usedDrivers(p.name,raceMode);
+    return`<div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px;">
+      <div style="font-weight:600;font-size:14px;margin-bottom:8px;">${p.name}
+        ${currentPick?`<span style="font-size:12px;font-weight:400;color:var(--accent);margin-left:6px;">→ ${currentPick}</span>`:'<span style="font-size:12px;font-weight:400;color:var(--text3);margin-left:6px;">No pick</span>'}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="${pid}-sel" style="flex:1;font-size:13px;padding:8px 10px;">
+          <option value="">— select driver —</option>
+          ${[...DRIVERS].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{
+            const isUsed=used.has(dName(d));
+            const val=dName(d);
+            const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);
+            return`<option value="${val}" ${currentPick===val?'selected':''} ${isUsed?'disabled':''}>${isUsed?'✕ ':''}${lbl}${isUsed?' (used)':''}</option>`;
+          }).join('')}
+        </select>
+        <button onclick="setPickForPlayer('${p.name.replace(/'/g,"\'")}','${pid}')" style="padding:8px 14px;border-radius:var(--r-sm);background:var(--accent);color:#0a0a0a;font-family:var(--font-display);font-size:14px;font-weight:700;border:none;cursor:pointer;white-space:nowrap;">Set</button>
+        ${currentPick?`<button onclick="clearPickForPlayer('${p.name.replace(/'/g,"\'")}') " style="padding:8px 10px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--danger);font-size:12px;cursor:pointer;">Clear</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
 }
 function toggleAdmin(name){
   const p=state.players.find(p=>p.name===name);
@@ -1738,8 +1871,22 @@ window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEdi
 window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace;
 window.savePastSeason=savePastSeason; window.addDriver=addDriver;
 window.removeDriver=removeDriver; window.toggleDriverEdit=toggleDriverEdit; window.saveDriverEdit=saveDriverEdit; window.addPlayer=addPlayer;
+function setPickForPlayer(playerName, pid){
+  const sel=document.getElementById(pid+'-sel');
+  if(!sel||!sel.value){toast('Select a driver first');return;}
+  const raceMode=currentRaceMode();
+  const used=raceMode==='final'?new Set():usedDrivers(playerName,raceMode);
+  if(used.has(sel.value)){toast(`${playerName} already used that driver`);return;}
+  state.picks[playerName]=sel.value;
+  saveState();toast(`Set ${playerName}'s pick: ${sel.value}`);renderAdminPicks();
+}
+function clearPickForPlayer(playerName){
+  delete state.picks[playerName];
+  saveState();toast(`Cleared ${playerName}'s pick`);renderAdminPicks();
+}
+window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
 window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup;
-window.changePassword=changePassword; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason;
+window.changePassword=changePassword; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
 
 /* ── BOOT ── */
 document.getElementById('login-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('login-pass').focus();});
