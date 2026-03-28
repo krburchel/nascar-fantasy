@@ -707,9 +707,17 @@ function championMap(){
   return map;
 }
 function seasonTotals(season){
+  // If season had playoffs, winner = most playoff pts (bonus + postseason + final)
+  // If no playoffs, winner = most regular season pts
+  const hasPlayoffs=(season.races||[]).some(r=>r.raceType==='postseason'||r.raceType==='final')
+                  ||(Object.keys(season.playoffBonuses||{}).length>0);
   const pts={};
-  (season.players||[]).forEach(p=>pts[p]=(season.playoffBonuses&&season.playoffBonuses[p])||0);
-  (season.races||[]).forEach(r=>{(r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});});
+  (season.players||[]).forEach(p=>pts[p]=hasPlayoffs?((season.playoffBonuses&&season.playoffBonuses[p])||0):0);
+  (season.races||[]).forEach(r=>{
+    const rt=r.raceType||'regular';
+    const countIt = hasPlayoffs ? (rt==='postseason'||rt==='final') : true;
+    if(countIt)(r.entries||[]).forEach(e=>{if(pts[e.player]!==undefined)pts[e.player]+=e.pts;});
+  });
   return pts;
 }
 function seasonRegularTotals(season){
@@ -727,7 +735,6 @@ function renderLeaderboard(){
   renderCountdown();startCountdown();
   const inPlayoffs=isPlayoffMode();
   const pts=inPlayoffs?playoffTotals():totals();
-  const regPts=totals();
   const champMap=championMap();
   const sorted=[...state.players].sort((a,b)=>(pts[b.name]||0)-(pts[a.name]||0));
   const sl=document.getElementById('standings-list');
@@ -744,8 +751,10 @@ function renderLeaderboard(){
     const role=p.role==='commissioner'?' <span class="pill pill-info">Comm</span>':'';
     const champs=champMap[p.name]||[];
     const trophies=champs.map(y=>`<span class="champ-badge">🏆 ${y}</span>`).join('');
-    const bonus=inPlayoffs&&state.playoffBonuses[p.name]?`<span style="font-size:11px;color:var(--text2)"> (+${state.playoffBonuses[p.name]} bonus)</span>`:'';
-    const subPts=inPlayoffs?`<div style="font-size:11px;color:var(--text2)">Reg season: ${regPts[p.name]||0} pts</div>`:'';
+    const bonusAmt=inPlayoffs?(state.playoffBonuses[p.name]||0):0;
+    const racePts=inPlayoffs?(pts[p.name]||0)-bonusAmt:0;
+    const bonus=inPlayoffs&&bonusAmt?`<span style="font-size:11px;color:var(--text2)"> (+${bonusAmt} bonus)</span>`:'';
+    const subPts=inPlayoffs?`<div style="font-size:11px;color:var(--text2)">${racePts} race pts${bonusAmt?' + '+bonusAmt+' bonus':''}</div>`:'';
     const trophyHtml=trophies?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophies}</div>`:'';
     return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}${role}</div><div class="standing-driver">${pick}${bonus}</div>${subPts}${trophyHtml}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
   }).join(''):'<p class="text-muted text-center">Add players in Admin to get started</p>';
@@ -1070,7 +1079,7 @@ function renderHistory(){
   document.getElementById('history-import-btn').style.display=isComm?'':'none';
   const impBtn=document.getElementById('history-import-btn');if(impBtn)impBtn.style.display=isComm?'':'none';
   const allPlayers={};
-  const processSeasons=[...state.pastSeasons,{year:'Current',races:state.races,players:state.players.map(p=>p.name)}];
+  const processSeasons=[...state.pastSeasons,{year:'Current',races:state.races,players:state.players.map(p=>p.name),playoffBonuses:state.playoffBonuses}];
   processSeasons.forEach(season=>{
     const pts=seasonTotals(season);
     Object.entries(pts).forEach(([name,p])=>{
@@ -1095,6 +1104,8 @@ function renderHistory(){
   sl.innerHTML=allSeasons.map((season,ri)=>{
     const idx=state.pastSeasons.length-1-ri;
     const pts=seasonTotals(season);
+    const regPtsH=seasonRegularTotals(season);
+    const hasPlayoffsH=(season.races||[]).some(r=>r.raceType==='postseason'||r.raceType==='final')||(Object.keys(season.playoffBonuses||{}).length>0);
     const sorted=Object.entries(pts).sort((a,b)=>b[1]-a[1]);
     const top3=sorted.slice(0,3);
     const posClass=['s1','s2','s3'];
@@ -1106,7 +1117,7 @@ function renderHistory(){
       </div>
       <div class="season-body" id="sbd-${idx}">
         <div class="season-podium">
-          ${top3.map((p,i)=>`<div class="podium-card"><div class="podium-pos ${posClass[i]}">${i+1}</div><div class="podium-name">${p[0]}</div><div class="podium-pts">${p[1]} pts</div></div>`).join('')}
+          ${top3.map((p,i)=>`<div class="podium-card"><div class="podium-pos ${posClass[i]}">${i+1}</div><div class="podium-name">${p[0]}</div><div class="podium-pts">${p[1]} pts</div>${hasPlayoffsH?`<div style="font-size:9px;color:var(--text3);margin-top:2px">playoff</div>`:''}  </div>`).join('')}
         </div>
         <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
           <div style="font-size:12px;color:var(--text2);letter-spacing:1px;text-transform:uppercase">Races</div>
