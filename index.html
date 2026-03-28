@@ -317,6 +317,11 @@ select option:disabled{color:var(--text3);}
       <div class="card">
         <div class="card-title">Edit Season</div>
         <div class="input-group" style="margin-bottom:12px"><label>Season Year / Label</label><input type="text" id="es-year" placeholder="e.g. 2023"></div>
+        <div style="margin-bottom:16px;">
+          <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:8px;">Playoff Bonuses</div>
+          <div id="es-bonus-list"></div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px;">Leave blank for seasons without playoffs or 0 bonus.</div>
+        </div>
         <div id="es-races-list"></div>
         <div style="background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:10px;">
           <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Add another race to this season</div>
@@ -1380,10 +1385,29 @@ function savePastSeason(){
 /* ── EDIT PAST SEASON ── */
 let editSeasonIdx = -1;
 
+function renderEsBonusList(){
+  const season = state.pastSeasons[editSeasonIdx];
+  const el = document.getElementById('es-bonus-list');
+  if(!el) return;
+  // Get all unique player names from this season
+  const players = season.players || state.players.map(p=>p.name);
+  const bonuses = season.playoffBonuses || {};
+  el.innerHTML = players.map(name => {
+    const pid = 'esbonus_' + name.replace(/\s+/g,'_');
+    const val = bonuses[name] || 0;
+    return `<div style="display:grid;grid-template-columns:1fr 100px;gap:8px;align-items:center;margin-bottom:6px;">
+      <div style="font-size:14px;font-weight:600;">${name}</div>
+      <div><input type="number" min="0" id="${pid}" value="${val||''}" placeholder="0" inputmode="numeric"
+        style="font-size:18px;font-weight:700;text-align:center;padding:6px 8px;width:100%"></div>
+    </div>`;
+  }).join('');
+}
+
 function editSeason(idx){
   editSeasonIdx = idx;
   const season = state.pastSeasons[idx];
   document.getElementById('es-year').value = season.year || '';
+  renderEsBonusList();
   renderEsRacesList();
   renderEsPlayerRows();
   setTimeout(()=>populateWinnerDropdown('es-winner-driver'), 0);
@@ -1507,6 +1531,15 @@ function esAddRace(){
 function saveEditSeason(){
   const season=state.pastSeasons[editSeasonIdx];
   season.year=document.getElementById('es-year').value.trim()||season.year;
+  // Save playoff bonuses
+  const bPlayers = season.players || state.players.map(p=>p.name);
+  const newBonuses = {};
+  bPlayers.forEach(name => {
+    const pid = 'esbonus_' + name.replace(/\s+/g,'_');
+    const val = parseInt(document.getElementById(pid)?.value) || 0;
+    if(val > 0) newBonuses[name] = val;
+  });
+  season.playoffBonuses = newBonuses;
   // Save all inline edits to existing races
   (season.races||[]).forEach((r,ri)=>{
     const nameEl=document.getElementById(`esr-name-${ri}`);
