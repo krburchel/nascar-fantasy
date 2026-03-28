@@ -704,6 +704,7 @@ function championMap(){
       map[name].push(season.year);
     }
   });
+  // Never include current season — only closed/archived seasons count
   return map;
 }
 function seasonTotals(season){
@@ -1079,15 +1080,19 @@ function renderHistory(){
   document.getElementById('history-import-btn').style.display=isComm?'':'none';
   const impBtn=document.getElementById('history-import-btn');if(impBtn)impBtn.style.display=isComm?'':'none';
   const allPlayers={};
-  const processSeasons=[...state.pastSeasons,{year:'Current',races:state.races,players:state.players.map(p=>p.name),playoffBonuses:state.playoffBonuses}];
+  // All-time: include current season for points/seasons count, but NOT for wins
+  const processSeasons=[...state.pastSeasons,{year:'Current',races:state.races,players:state.players.map(p=>p.name),playoffBonuses:state.playoffBonuses,isCurrent:true}];
   processSeasons.forEach(season=>{
     const pts=seasonTotals(season);
     Object.entries(pts).forEach(([name,p])=>{
       if(!allPlayers[name])allPlayers[name]={name,totalPts:0,wins:0,seasons:0};
       allPlayers[name].totalPts+=p;allPlayers[name].seasons++;
     });
-    const sorted=Object.entries(pts).sort((a,b)=>b[1]-a[1]);
-    if(sorted.length&&sorted[0][1]>0&&allPlayers[sorted[0][0]])allPlayers[sorted[0][0]].wins++;
+    // Only closed past seasons count as wins
+    if(!season.isCurrent){
+      const sorted=Object.entries(pts).sort((a,b)=>b[1]-a[1]);
+      if(sorted.length&&sorted[0][1]>0&&allPlayers[sorted[0][0]])allPlayers[sorted[0][0]].wins++;
+    }
   });
   const atSorted=Object.values(allPlayers).sort((a,b)=>b.totalPts-a.totalPts);
   const statsEl=document.getElementById('history-alltime-stats');
