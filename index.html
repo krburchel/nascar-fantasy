@@ -782,31 +782,1445 @@ function renderLeaderboard(){
       }).join('');
   }else lrc.style.display='none';
 }
+function renderUpcomingSchedule(){
+  const card=document.getElementById('upcoming-schedule-card');
+  const list=document.getElementById('upcoming-schedule-list');
+  if(!card||!list)return;
+  // Show races after the first one (first is already shown in countdown)
+  const upcoming=(state.schedule||[]).slice(1);
+  if(!upcoming.length){card.style.display='none';return;}
+  card.style.display='';
+  list.innerHTML=upcoming.map((r,i)=>{
+    const typeLabel={'regular':'Regular','postseason':'Post Season','final':'Final Race'}[r.raceType]||'Regular';
+    const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
+    const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
+    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}">
+      <div>
+        <div style="font-size:14px;font-weight:600;">${r.name} <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span></div>
+        ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
+        ${dl?`<div style="font-size:11px;color:var(--text3);">🔒 ${dl}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
 
-window.tvNetworkBadge=tvNetworkBadge; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
+function renderCountdown(){
+  const el=document.getElementById('countdown-section');
+  const dl=state.deadline?new Date(state.deadline):null;
+  const race=state.nextRace||'Next Race';
+  const track=state.nextTrack||'';
+  const isLocked=dl&&new Date()>=dl;
+  const noPick=!state.picks[currentUser.name];
+  let h=`<div class="countdown-label">${isLocked?'Picks locked for':'Picks close in'}</div><div class="countdown-race">${race}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}`;
+  if(!dl){
+    h=`<div class="countdown-label">Picks window</div><div class="countdown-race">${race}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}<div class="cd-open">Open — no deadline set</div>`;
+  } else if(isLocked){
+    h+=`<div class="cd-locked">LOCKED</div>`;
+  } else {
+    const dlLocal=dl.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    h+=`<div class="countdown-digits" id="cd-digits">—</div><div style="font-size:11px;color:var(--text2);margin-top:8px">Locks ${dlLocal} (your time)</div>`;
+  }
+  if(noPick&&!isLocked)h+=`<div class="pill pill-danger" style="margin-top:10px;display:inline-block">No pick set yet</div>`;
+  if('Notification' in window&&Notification.permission==='default')h+=`<div style="margin-top:10px"><button onclick="requestNotifyPermission()" style="font-size:12px;padding:5px 12px;border-radius:6px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">🔔 Enable deadline alerts</button></div>`;
+  if('Notification' in window&&Notification.permission==='granted'&&!isLocked)h+=`<div style="margin-top:8px;font-size:11px;color:var(--text3);">🔔 You'll be alerted 1 hour before picks lock</div>`;
+  const nm=currentRaceMode();
+  if(nm==='postseason')h+=`<div class="pill pill-gold" style="margin-top:10px;display:inline-block;margin-left:6px">Post Season</div>`;
+  if(nm==='final')h+=`<div class="pill pill-danger" style="margin-top:10px;display:inline-block;margin-left:6px">Final Race</div>`;
+  el.innerHTML=h;
+}
+function requestNotifyPermission(){
+  if(!('Notification' in window))return;
+  if(Notification.permission==='default'){
+    Notification.requestPermission();
+  }
+}
+
+function sendPicksAlert(raceName){
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  const n=new Notification('⏰ 1 Hour to Lock Picks!',{
+    body:`Picks for ${raceName} lock in 1 hour. Get your pick in!`,
+    icon:'https://krburchel.github.io/nascar-fantasy/icon-192.png',
+    tag:'picks-deadline',
+    requireInteraction:true
+  });
+  n.onclick=()=>{window.focus();n.close();};
+}
+
+function startCountdown(){
+  clearInterval(countdownTimer);
+  countdownTimer=setInterval(()=>{
+    const dl=state.deadline?new Date(state.deadline):null;if(!dl)return;
+    const diff=dl-new Date();const digits=document.getElementById('cd-digits');
+    if(!digits){clearInterval(countdownTimer);return;}
+    if(diff<=0){renderCountdown();clearInterval(countdownTimer);return;}
+    // Fire 1-hour alert once per deadline
+    const oneHour=3600000;
+    if(diff<=oneHour&&diff>oneHour-2000&&_notifiedDeadline!==state.deadline){
+      _notifiedDeadline=state.deadline;
+      // Only alert if user hasn't picked yet
+      if(!state.picks[currentUser?.name]){
+        sendPicksAlert(state.nextRace||'the next race');
+      }
+    }
+    const d=Math.floor(diff/86400000),h=Math.floor((diff%86400000)/3600000),m=Math.floor((diff%3600000)/60000),s=Math.floor((diff%60000)/1000);
+    const unit=(n,l)=>`<div class="cd-unit"><div class="cd-num">${String(n).padStart(2,'0')}</div><div class="cd-lbl">${l}</div></div>`;
+    const sep=`<div class="cd-sep">:</div>`;
+    digits.innerHTML=(d>0?unit(d,'Days')+sep:'')+unit(h,'Hrs')+sep+unit(m,'Min')+sep+unit(s,'Sec');
+  },1000);
+}
+
+/* ── PICKS ── */
+function renderPicks(){
+  const dl=state.deadline?new Date(state.deadline):null;
+  const locked=dl&&new Date()>=dl;
+  const myPick=state.picks[currentUser.name];
+  const race=state.nextRace||'Next Race';
+  const raceMode=currentRaceMode();
+  const isFinal=raceMode==='final';
+  const isPostseason=raceMode==='postseason';
+  const used=isFinal?new Set():usedDrivers(currentUser.name, raceMode);
+  const section=document.getElementById('my-pick-section');
+  if(locked){
+    section.innerHTML=`<div style="font-family:var(--font-display);font-size:28px;font-weight:700;color:var(--accent)">${myPick||'No pick'}</div><div class="pick-race">${race}</div><div class="pill pill-danger" style="margin-top:8px;display:inline-block">Picks locked</div>`;
+  }else{
+    const availCount=DRIVERS.filter(d=>!used.has(dName(d))).length;
+    const modeNote=isFinal
+      ?`<div class="pill pill-danger" style="display:inline-block;margin-bottom:8px">Final Race — all drivers available</div>`
+      :isPostseason
+        ?`<div class="pill pill-gold" style="display:inline-block;margin-bottom:8px">Post Season — ${used.size} used this post season · ${availCount} left</div>`
+        :`<div style="font-size:12px;color:var(--text2);margin-bottom:6px">${used.size} driver${used.size!==1?'s':''} used this season · ${availCount} remaining</div>`;
+    section.innerHTML=`<div class="pick-form"><div class="pick-race">${race}</div>${modeNote}
+      <select id="pick-driver">
+        <option value="">— Select your driver —</option>
+        ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const isUsed=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${myPick===val?'selected':''} ${isUsed?'disabled':''}>${isUsed?'✕ ':''}${lbl}${isUsed?' (used)':''}</option>`;}).join('')}
+      </select>
+      <button class="btn btn-primary" onclick="savePick()">Lock In Pick</button>
+      ${myPick?`<div class="text-muted text-center" style="font-size:13px">Current: <strong>${myPick}</strong></div>`:''}
+    </div>`;
+  }
+  document.getElementById('all-picks-list').innerHTML=state.players.map(p=>{
+    const pick=state.picks[p.name];
+    const pMode=currentRaceMode();
+    const pUsed=pMode==='final'?new Set():usedDrivers(p.name,pMode);
+    const rem=DRIVERS.length-pUsed.size;
+    return`<div class="standing-row"><div style="flex:1"><div style="font-weight:600;font-size:14px">${p.name}</div>${pMode!=='final'?`<div style="font-size:11px;color:var(--text3)">${rem} drivers left</div>`:''}</div><div style="font-size:13px;color:${pick?'var(--text)':'var(--text3)'}">${pick||(locked?'—':'Pending')}</div></div>`;
+  }).join('');
+}
+function savePick(){
+  const d=document.getElementById('pick-driver').value;
+  if(!d){toast('Select a driver first');return;}
+  const raceMode=currentRaceMode();
+  const isFinal=raceMode==='final';
+  const isPostseason=raceMode==='postseason';
+  const used=isFinal?new Set():usedDrivers(currentUser.name, raceMode);
+  if(used.has(d)){toast('You already used that driver this season');return;}
+  state.picks[currentUser.name]=d;
+  saveState();toast(`Pick saved: ${d}`);
+}
+
+/* ── RESULTS ── */
+let resultMode='current';
+function setResultMode(mode){
+  resultMode=mode;
+  document.getElementById('mode-btn-current').className='mode-btn'+(mode==='current'?' mode-btn-active':'');
+  document.getElementById('mode-btn-backfill').className='mode-btn'+(mode==='backfill'?' mode-btn-active':'');
+  document.getElementById('backfill-note').style.display=mode==='backfill'?'':'none';
+  renderResultInputs();
+}
+function populateWinnerDropdown(selId){
+  const sel=document.getElementById(selId);
+  if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— select —</option>'+
+    [...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${cur===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('');
+}
+function renderResultInputs(){
+  const inputs=document.getElementById('results-player-inputs');
+  inputs.innerHTML=state.players.map(p=>{
+    const pid=p.name.replace(/\s+/g,'_');
+    const pick=state.picks[p.name]||null;
+    const resMode=currentRaceMode();
+    const used=resMode==='final'?new Set():usedDrivers(p.name,resMode);
+    const driverField=resultMode==='backfill'
+      ?`<div style="margin-bottom:10px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver picked</label>
+          <select id="rdrv-${pid}" onchange="updatePreview('${pid}')">
+            <option value="">— select driver —</option>
+            ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const wu=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${wu?'disabled':''}>${wu?'✕ ':''}${lbl}${wu?' (used)':''}</option>`;}).join('')}
+          </select></div>`
+      :`<div class="fast-player-driver">${pick||'No pick set'}</div>`;
+    return`<div class="fast-player">
+      <div class="fast-player-header">
+        <div><div class="fast-player-name">${p.name}</div>${resultMode==='current'?driverField:''}</div>
+        <div class="fast-score-preview" id="preview-${pid}">0 pts</div>
+      </div>
+      ${resultMode==='backfill'?driverField:''}
+      <div style="margin-top:4px;display:flex;gap:8px;align-items:flex-end;">
+        <div style="flex:1"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Points</label><input type="number" min="0" placeholder="0" id="rpts-${pid}" oninput="updatePreview('${pid}')" inputmode="numeric" style="font-size:22px;font-weight:700;text-align:center;width:100%"></div>
+        <button id="rwin-${pid}" onclick="toggleWin('${pid}')" style="padding:10px 14px;border-radius:var(--r-sm);border:1px solid var(--border2);background:transparent;color:var(--text2);font-family:var(--font-display);font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;letter-spacing:.5px;">+10 WIN</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function renderResults(){
+  renderResultInputs();
+  populateWinnerDropdown('res-winner-driver');
+  renderSeasonStatus();
+  // Pre-select race type based on what admin set for next race
+  const rtSel=document.getElementById('res-race-type');
+  if(rtSel&&state.nextRaceType)rtSel.value=state.nextRaceType;
+  const hl=document.getElementById('history-list');
+  hl.innerHTML=state.races.length?[...state.races].reverse().map((r,i)=>{
+    const idx=state.races.length-1-i;
+    const typeLabel={'postseason':'Post Season','final':'Final Race','regular':''}[r.raceType||'regular']||'';
+    const typeColor={'postseason':'pill-gold','final':'pill-danger','regular':''}[r.raceType||'regular']||'';
+    const tag=(r.backfill?' <span class="pill pill-info" style="font-size:9px">past</span>':'')+(typeLabel?` <span class="pill ${typeColor}" style="font-size:9px">${typeLabel}</span>`:'');
+    return`<div class="race-chip">
+      <div class="race-chip-name" style="display:flex;align-items:center;justify-content:space-between">
+        <span>${r.name}${tag}</span>
+        <button onclick="deleteRace(${idx})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 6px;">Delete</button>
+      </div>
+      ${r.track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${r.track}</div>`:''}
+      ${r.winnerDriver?`<div style="font-size:12px;background:rgba(232,200,74,.1);color:var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:6px;display:inline-block;">🏆 ${r.winnerDriver}${r.winnerPts?' · '+r.winnerPts+' pts':''}</div>`:''}
+      ${[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${e.player} — ${e.driver}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('')}
+    </div>`;
+  }).join(''):'<p class="text-muted text-center">No races yet</p>';
+}
+function updatePreview(pid){
+  const pts=parseInt(document.getElementById('rpts-'+pid)?.value)||0;
+  const won=document.getElementById('rwin-'+pid)?.dataset.won==='1';
+  const prev=document.getElementById('preview-'+pid);
+  if(prev)prev.textContent=calcScore(pts,won)+' pts';
+}
+function toggleWin(pid){
+  const btn=document.getElementById('rwin-'+pid);
+  const isWon=btn.dataset.won==='1';
+  btn.dataset.won=isWon?'0':'1';
+  btn.style.background=isWon?'transparent':'var(--accent)';
+  btn.style.color=isWon?'var(--text2)':'#0a0a0a';
+  btn.style.borderColor=isWon?'var(--border2)':'var(--accent)';
+  updatePreview(pid);
+}
+function togglePsWin(pid){
+  const btn=document.getElementById(pid+'-win');
+  const isWon=btn.dataset.won==='1';
+  btn.dataset.won=isWon?'0':'1';
+  btn.style.background=isWon?'transparent':'var(--accent)';
+  btn.style.color=isWon?'var(--text2)':'#0a0a0a';
+  btn.style.borderColor=isWon?'var(--border2)':'var(--accent)';
+}
+function submitResults(){
+  const name=document.getElementById('res-race-name').value.trim();
+  const track=document.getElementById('res-track-name').value.trim();
+  const raceType=document.getElementById('res-race-type')?.value||'regular';
+  const winnerDriver=document.getElementById('res-winner-driver')?.value||'';
+  const winnerPts=parseInt(document.getElementById('res-winner-pts')?.value)||0;
+  if(!name){toast('Enter a race name');return;}
+  const isBackfill=resultMode==='backfill';
+  const entries=state.players.map(p=>{
+    const pid=p.name.replace(/\s+/g,'_');
+    const pts=parseInt(document.getElementById('rpts-'+pid)?.value)||0;
+    const won=document.getElementById('rwin-'+pid)?.dataset.won==='1';
+    const driver=isBackfill?(document.getElementById('rdrv-'+pid)?.value||'—'):(state.picks[p.name]||'—');
+    return{player:p.name,driver,won,pts:calcScore(pts,won)};
+  });
+  state.races.push({name,track,raceType,entries,backfill:isBackfill,winnerDriver,winnerPts});
+  if(!isBackfill){state.picks={};if(state.schedule&&state.schedule.length)state.schedule.shift();syncNextRaceFromSchedule();}
+  saveState();toast(`${isBackfill?'Past race':'Race'} saved: ${name}`);
+  document.getElementById('res-race-name').value='';
+  document.getElementById('res-track-name').value='';
+  const rt=document.getElementById('res-race-type');if(rt)rt.value='regular';
+  const wd=document.getElementById('res-winner-driver');if(wd)wd.value='';
+  const wp=document.getElementById('res-winner-pts');if(wp)wp.value='';
+  renderResults();
+}
+function deleteRace(idx){
+  if(!confirm('Delete this race?'))return;
+  state.races.splice(idx,1);saveState();toast('Race deleted');renderResults();
+}
+
+/* ── SEASON STATUS ── */
+function renderSeasonStatus(){
+  const el=document.getElementById('season-status-body');
+  if(!el)return;
+  const regRaces=state.races.filter(r=>(r.raceType||'regular')==='regular');
+  const inPlayoffs=isPlayoffMode();
+  const hasFinal=state.races.some(r=>r.raceType==='final');
+  const bonusSet=Object.keys(state.playoffBonuses||{}).length>0;
+
+  if(state.seasonClosed){
+    el.innerHTML=`<div class="pill pill-danger" style="display:inline-block;margin-bottom:10px;font-size:12px;">Season Closed</div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">Season is over. Start a new season when ready.</p>
+      <button class="btn btn-primary" onclick="openNewSeason()">Open New Season</button>`;
+    return;
+  }
+
+  // Phase 1: Regular season active — show close regular season button
+  if(!inPlayoffs){
+    const regPts=totals();
+    const sorted=[...state.players].sort((a,b)=>(regPts[b.name]||0)-(regPts[a.name]||0));
+    el.innerHTML=`<div style="font-size:13px;color:var(--text2);margin-bottom:12px;">${regRaces.length} regular season race${regRaces.length!==1?'s':''} recorded</div>
+      <button class="btn" style="background:var(--accent);color:#0a0a0a;font-size:16px;font-family:var(--font-display);font-weight:700;" onclick="startCloseRegularSeason()">Close Regular Season & Set Playoff Bonuses</button>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:center">Archives regular season and opens the playoff bonus setup</div>`;
+    return;
+  }
+
+  // Phase 2: Playoffs active — show close full season
+  el.innerHTML=`<div class="pill pill-gold" style="display:inline-block;margin-bottom:10px;font-size:12px;">Playoffs Active</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:12px;">${state.races.filter(r=>r.raceType==='postseason'||r.raceType==='final').length} playoff race${state.races.filter(r=>r.raceType==='postseason'||r.raceType==='final').length!==1?'s':''} recorded${hasFinal?' · Final race logged':''}</div>
+    <button class="btn" style="background:var(--danger);color:#fff;font-size:16px;" onclick="confirmCloseSeason()">Close Full Season</button>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:center">Archives everything to History and resets for next season</div>`;
+}
+
+function startCloseRegularSeason(){
+  const regPts=totals();
+  const sorted=[...state.players].sort((a,b)=>(regPts[b.name]||0)-(regPts[a.name]||0));
+  const el=document.getElementById('season-status-body');
+  // Build bonus input form sorted by regular season finish
+  const rows=sorted.map((p,i)=>`
+    <div style="display:grid;grid-template-columns:1fr auto 100px;gap:8px;align-items:center;margin-bottom:8px;">
+      <div><span style="font-family:var(--font-display);font-size:18px;font-weight:700;color:${i===0?'var(--accent)':i===1?'#aaa':i===2?'#c4845a':'var(--text2)'}">${i+1}.</span> <span style="font-weight:600">${p.name}</span></div>
+      <div style="font-size:13px;color:var(--text2)">${regPts[p.name]||0} pts</div>
+      <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:2px">Bonus</label>
+        <input type="number" min="0" id="bonus-${p.name.replace(/\s+/g,'_')}" placeholder="0" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center;padding:6px 8px;width:100%"></div>
+    </div>`).join('');
+  el.innerHTML=`
+    <div style="font-size:13px;color:var(--text2);margin-bottom:14px;">Set playoff seeding bonus points for each player based on their regular season finish:</div>
+    ${rows}
+    <button class="btn btn-primary" onclick="savePlayoffBonuses()" style="margin-top:6px">Save Bonuses & Start Playoffs</button>
+    <button class="btn btn-ghost" onclick="renderSeasonStatus()" style="margin-top:8px">Cancel</button>`;
+}
+
+function savePlayoffBonuses(){
+  const regPts=totals();
+  const sorted=[...state.players].sort((a,b)=>(regPts[b.name]||0)-(regPts[a.name]||0));
+  const bonuses={};
+  sorted.forEach(p=>{
+    const pid=p.name.replace(/\s+/g,'_');
+    bonuses[p.name]=parseInt(document.getElementById('bonus-'+pid)?.value)||0;
+  });
+  state.playoffBonuses=bonuses;
+  // Archive regular season races separately for history reference
+  if(!state.regularSeasonArchive) state.regularSeasonArchive=[];
+  state.regularSeasonArchive=[...state.races.filter(r=>(r.raceType||'regular')==='regular')];
+  saveState();
+  toast('Playoff bonuses saved — playoffs started!');
+  renderSeasonStatus();renderLeaderboard();
+}
+
+function confirmCloseSeason(){
+  if(!confirm('Close the full season? Everything will be archived to History.'))return;
+  closeSeason();
+}
+function closeSeason(){
+  const playerNames=state.players.map(p=>p.name);
+  const year=new Date().getFullYear().toString();
+  // Build combined season with bonus info
+  const regRaces=state.regularSeasonArchive||state.races.filter(r=>(r.raceType||'regular')==='regular');
+  const playoffRaces=state.races.filter(r=>r.raceType==='postseason'||r.raceType==='final');
+  state.pastSeasons.push({
+    year, players:playerNames,
+    races:[...regRaces,...playoffRaces],
+    playoffBonuses:{...(state.playoffBonuses||{})},
+    closed:true
+  });
+  state.races=[];state.picks={};state.nextRace='';state.nextTrack='';
+  state.deadline='';state.seasonClosed=false;
+  state.playoffBonuses={};state.regularSeasonArchive=[];state.schedule=[];
+  saveState();toast('Season closed and archived');renderResults();renderLeaderboard();
+}
+function openNewSeason(){
+  state.seasonClosed=false;state.playoffBonuses={};state.regularSeasonArchive=[];state.schedule=[];
+  state.races=[];state.picks={};state.nextRace='';state.nextTrack='';state.deadline='';
+  saveState();toast('New season started');renderResults();renderLeaderboard();
+}
+
+/* ── HISTORY ── */
+let newSeasonRaces=[];
+function renderHistory(){
+  const isComm=currentUser.role==='commissioner'||currentUser.role==='admin';
+  document.getElementById('history-add-btn').style.display=isComm?'':'none';
+  document.getElementById('history-import-btn').style.display=isComm?'':'none';
+  const impBtn=document.getElementById('history-import-btn');if(impBtn)impBtn.style.display=isComm?'':'none';
+  const allPlayers={};
+  // All-time: include current season for points/seasons count, but NOT for wins
+  const processSeasons=[...state.pastSeasons,{year:'Current',races:state.races,players:state.players.map(p=>p.name),playoffBonuses:state.playoffBonuses,isCurrent:true}];
+  processSeasons.forEach(season=>{
+    const pts=seasonTotals(season);
+    Object.entries(pts).forEach(([name,p])=>{
+      if(!allPlayers[name])allPlayers[name]={name,totalPts:0,wins:0,seasons:0};
+      allPlayers[name].totalPts+=p;allPlayers[name].seasons++;
+    });
+    // Only closed past seasons count as wins
+    if(!season.isCurrent){
+      const sorted=Object.entries(pts).sort((a,b)=>b[1]-a[1]);
+      if(sorted.length&&sorted[0][1]>0&&allPlayers[sorted[0][0]])allPlayers[sorted[0][0]].wins++;
+    }
+  });
+  const atSorted=Object.values(allPlayers).sort((a,b)=>b.totalPts-a.totalPts);
+  const statsEl=document.getElementById('history-alltime-stats');
+  statsEl.innerHTML=atSorted.length
+    ?`<div class="card-title">All-Time Standings</div>`+atSorted.map((p,i)=>{
+        const rc=i===0?'p1':i===1?'p2':i===2?'p3':'';
+        const chYears=(championMap()[p.name]||[]);
+        const trophyBadges=chYears.map(y=>`<span class="champ-badge">🏆 ${y}</span>`).join('');
+        return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}</div><div class="standing-driver">${p.wins} season win${p.wins!==1?'s':''} · ${p.seasons} season${p.seasons!==1?'s':''}</div>${trophyBadges?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophyBadges}</div>`:''}</div><div class="standing-pts">${p.totalPts}</div></div>`;
+      }).join('')
+    :'<div class="text-muted text-center">No history yet</div>';
+  const sl=document.getElementById('history-seasons-list');
+  const allSeasons=[...state.pastSeasons].sort((a,b)=>String(b.year).localeCompare(String(a.year),undefined,{numeric:true}));
+  sl.innerHTML=allSeasons.map((season,ri)=>{
+    const idx=state.pastSeasons.indexOf(season);
+    const pts=seasonTotals(season);
+    const regPtsH=seasonRegularTotals(season);
+    const hasPlayoffsH=(season.races||[]).some(r=>r.raceType==='postseason'||r.raceType==='final')||(Object.keys(season.playoffBonuses||{}).length>0);
+    const sorted=Object.entries(pts).sort((a,b)=>b[1]-a[1]);
+    const top3=sorted.slice(0,3);
+    const posClass=['s1','s2','s3'];
+    const raceCount=(season.races||[]).length;
+    return`<div class="season-card">
+      <div class="season-header" onclick="toggleSeason('sbd-${idx}')">
+        <div class="season-year">${season.year}</div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+          <div style="display:flex;gap:10px;align-items:center;">
+            ${top3[0]?`<span style="font-size:12px;font-weight:600;color:var(--accent)">🥇 ${top3[0][0]}</span>`:''}
+            ${top3[1]?`<span style="font-size:12px;color:#aaa">🥈 ${top3[1][0]}</span>`:''}
+            ${top3[2]?`<span style="font-size:12px;color:#c4845a">🥉 ${top3[2][0]}</span>`:''}
+          </div>
+        </div>
+      </div>
+      <div class="season-body" id="sbd-${idx}">
+        <div class="season-podium">
+          ${top3.map((p,i)=>`<div class="podium-card"><div class="podium-pos ${posClass[i]}">${i+1}</div><div class="podium-name">${p[0]}</div><div class="podium-pts">${p[1]} pts</div>${hasPlayoffsH?`<div style="font-size:9px;color:var(--text3);margin-top:2px">playoff</div>`:''}  </div>`).join('')}
+        </div>
+        <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:12px;color:var(--text2);letter-spacing:1px;text-transform:uppercase">Races</div>
+          ${isComm?`<button onclick="editSeason(${idx})" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:3px 8px;margin-right:6px;">Edit</button><button onclick="deleteSeason(${idx})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;">Delete season</button>`:''}
+        </div>
+        ${(season.races||[]).map(r=>`
+          <div class="hist-race-row">
+            <div><div style="display:flex;align-items:center;gap:6px"><div class="hist-race-name">${r.name}</div>${r.raceType==='postseason'?'<span class="pill pill-gold" style="font-size:9px">Post Season</span>':r.raceType==='final'?'<span class="pill pill-danger" style="font-size:9px">Final</span>':''}</div>
+            ${r.track?`<div style="font-size:11px;color:var(--text3)">${r.track}</div>`:''}
+            ${r.winnerDriver?`<div style="font-size:11px;color:var(--accent)">🏆 ${r.winnerDriver}${r.winnerPts?' · '+r.winnerPts+'pts':''}</div>`:''}
+            <div class="hist-race-winner">${[...r.entries].sort((a,b)=>b.pts-a.pts)[0]?.player||'—'} led</div></div>
+            <button class="hist-expand-btn" onclick="showRaceDetail(${idx},'${r.name.replace(/'/g,"\'")}')">Details</button>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+  if(!allSeasons.length)sl.innerHTML='<p class="text-muted text-center" style="padding:1rem 0">No past seasons yet</p>';
+}
+function toggleSeason(id){const el=document.getElementById(id);if(el)el.classList.toggle('open');}
+function showRaceDetail(seasonIdx,raceName){
+  const season=state.pastSeasons[seasonIdx];
+  const race=season.races.find(r=>r.name===raceName);
+  if(!race)return;
+  alert(race.entries.sort((a,b)=>b.pts-a.pts).map(e=>`${e.player} — ${e.driver}${e.won?' WIN':''}: ${e.pts}pts`).join('\n'));
+}
+function deleteSeason(idx){
+  if(!confirm('Delete this entire season?'))return;
+  state.pastSeasons.splice(idx,1);saveState();toast('Season deleted');renderHistory();
+}
+
+/* ── CSV IMPORT ── */
+let csvData = null; // {headers, rows, playerCols, raceName, track, raceType, winnerDriver, winnerPts}
+
+function handleCsvImport(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    parseCsv(text);
+  };
+  reader.readAsText(file);
+  event.target.value = ''; // reset so same file can be re-selected
+}
+
+function parseCsv(text){
+  // Split into rows, handle quoted fields
+  const rows = text.trim().split(/\r?\n/).map(row => {
+    const cells = [];
+    let cur = '', inQuote = false;
+    for(let i=0;i<row.length;i++){
+      if(row[i]==='"'){ inQuote=!inQuote; }
+      else if(row[i]===','&&!inQuote){ cells.push(cur.trim()); cur=''; }
+      else cur+=row[i];
+    }
+    cells.push(cur.trim());
+    return cells;
+  });
+  if(rows.length < 2){ toast('CSV must have at least a header row and one data row'); return; }
+  const headers = rows[0];
+  const dataRows = rows.slice(1).filter(r=>r.some(c=>c!==''));
+
+  // Auto-detect columns
+  const lower = headers.map(h=>h.toLowerCase());
+  const raceCol = lower.findIndex(h=>h.includes('race')||h.includes('name'));
+  const trackCol = lower.findIndex(h=>h.includes('track')||h.includes('speedway')||h.includes('circuit'));
+  const typeCol = lower.findIndex(h=>h.includes('type')||h.includes('season'));
+  const winnerDriverCol = lower.findIndex(h=>h.includes('winner')||h.includes('winning driver'));
+  const winnerPtsCol = lower.findIndex(h=>h.includes('winner pts')||h.includes('winning pts')||h.includes('winner points'));
+
+  // Everything else = player column candidates
+  const knownCols = new Set([raceCol,trackCol,typeCol,winnerDriverCol,winnerPtsCol].filter(i=>i>=0));
+  const playerCols = headers.map((_,i)=>i).filter(i=>!knownCols.has(i));
+
+  csvData = { headers, dataRows, raceCol, trackCol, typeCol, winnerDriverCol, winnerPtsCol, playerCols };
+
+  renderCsvPreview();
+  showCsvPanel();
+}
+
+function renderCsvPreview(){
+  const { headers, dataRows, raceCol, trackCol, typeCol, winnerDriverCol, winnerPtsCol, playerCols } = csvData;
+
+  // Column mapping UI
+  const mapEl = document.getElementById('csv-column-map');
+  mapEl.innerHTML = `
+    <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:8px;">Column Mapping</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:3px">Race Name Column</label>
+        <select id="csv-map-race" style="font-size:13px;padding:8px;">
+          <option value="-1">— none —</option>
+          ${headers.map((h,i)=>`<option value="${i}" ${i===raceCol?'selected':''}>${h}</option>`).join('')}
+        </select></div>
+      <div><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:3px">Track Column</label>
+        <select id="csv-map-track" style="font-size:13px;padding:8px;">
+          <option value="-1">— none —</option>
+          ${headers.map((h,i)=>`<option value="${i}" ${i===trackCol?'selected':''}>${h}</option>`).join('')}
+        </select></div>
+      <div><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:3px">Race Type Column</label>
+        <select id="csv-map-type" style="font-size:13px;padding:8px;">
+          <option value="-1">— none —</option>
+          ${headers.map((h,i)=>`<option value="${i}" ${i===typeCol?'selected':''}>${h}</option>`).join('')}
+        </select></div>
+      <div><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:3px">Winner Driver Column</label>
+        <select id="csv-map-wdrv" style="font-size:13px;padding:8px;">
+          <option value="-1">— none —</option>
+          ${headers.map((h,i)=>`<option value="${i}" ${i===winnerDriverCol?'selected':''}>${h}</option>`).join('')}
+        </select></div>
+      <div><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:3px">Winner Points Column</label>
+        <select id="csv-map-wpts" style="font-size:13px;padding:8px;">
+          <option value="-1">— none —</option>
+          ${headers.map((h,i)=>`<option value="${i}" ${i===winnerPtsCol?'selected':''}>${h}</option>`).join('')}
+        </select></div>
+    </div>
+    <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:6px;">Player Columns <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text3);font-size:11px">(check all that contain player points)</span></div>
+    <div id="csv-player-checks" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+      ${headers.map((h,i)=>`
+        <label style="display:flex;align-items:center;gap:4px;font-size:13px;background:var(--surface2);padding:4px 10px;border-radius:20px;cursor:pointer;">
+          <input type="checkbox" value="${i}" ${playerCols.includes(i)?'checked':''} style="accent-color:var(--accent)"> ${h}
+        </label>`).join('')}
+    </div>`;
+
+  // Preview table
+  const previewEl = document.getElementById('csv-preview');
+  const previewRows = dataRows.slice(0,5);
+  previewEl.innerHTML = `<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">${dataRows.length} races found — preview:</div>
+    <div style="overflow-x:auto;margin-bottom:12px;">
+      <table style="font-size:12px;width:100%;border-collapse:collapse;">
+        <thead><tr>${headers.map(h=>`<th style="padding:4px 8px;border-bottom:1px solid var(--border);color:var(--text2);text-align:left;white-space:nowrap">${h}</th>`).join('')}</tr></thead>
+        <tbody>${previewRows.map(row=>`<tr>${headers.map((_,i)=>`<td style="padding:4px 8px;border-bottom:1px solid var(--border);white-space:nowrap">${row[i]||''}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+function showCsvPanel(){
+  document.getElementById('csv-import-panel').style.display='';
+  document.getElementById('history-add-btn-wrap').style.display='none';
+  document.getElementById('history-alltime-stats').style.display='none';
+  document.getElementById('history-seasons-list').style.display='none';
+}
+
+function cancelCsvImport(){
+  csvData=null;
+  document.getElementById('csv-import-panel').style.display='none';
+  document.getElementById('history-add-btn-wrap').style.display='';
+  document.getElementById('history-alltime-stats').style.display='';
+  document.getElementById('history-seasons-list').style.display='';
+}
+
+function confirmCsvImport(){
+  if(!csvData){toast('No CSV loaded');return;}
+  const year=document.getElementById('csv-season-year').value.trim();
+  if(!year){toast('Enter a season year');return;}
+
+  // Read column mapping from UI
+  const raceCol=parseInt(document.getElementById('csv-map-race').value);
+  const trackCol=parseInt(document.getElementById('csv-map-track').value);
+  const typeCol=parseInt(document.getElementById('csv-map-type').value);
+  const wDrvCol=parseInt(document.getElementById('csv-map-wdrv').value);
+  const wPtsCol=parseInt(document.getElementById('csv-map-wpts').value);
+  const playerChecks=[...document.querySelectorAll('#csv-player-checks input[type=checkbox]:checked')].map(cb=>parseInt(cb.value));
+
+  if(playerChecks.length===0){toast('Select at least one player column');return;}
+
+  // Build races
+  const playerNames=playerChecks.map(i=>csvData.headers[i]);
+  const races=csvData.dataRows.map(row=>{
+    const name=raceCol>=0?(row[raceCol]||'Unknown Race'):'Unknown Race';
+    const track=trackCol>=0?(row[trackCol]||''):'';
+    const rawType=typeCol>=0?(row[typeCol]||''):'';
+    // Normalise race type
+    const raceType=rawType.toLowerCase().includes('post')||rawType.toLowerCase().includes('playoff')?'postseason':
+                   rawType.toLowerCase().includes('final')?'final':'regular';
+    const winnerDriver=wDrvCol>=0?(row[wDrvCol]||''):'';
+    const winnerPts=wPtsCol>=0?(parseInt(row[wPtsCol])||0):0;
+    const entries=playerChecks.map(colIdx=>{
+      const pts=parseInt(row[colIdx])||0;
+      return{player:csvData.headers[colIdx],driver:'—',pts,won:false};
+    });
+    return{name,track,raceType,winnerDriver,winnerPts,entries,backfill:true};
+  });
+
+  state.pastSeasons.push({year,players:playerNames,races});
+  saveState();
+  toast(`Imported ${races.length} races for ${year}`);
+  cancelCsvImport();
+  renderHistory();
+}
+
+/* ── PAST SEASON ENTRY ── */
+let psStandingCount=0;
+function startPastSeason(){
+  newSeasonRaces=[];
+  psStandingCount=0;
+  document.getElementById('ps-year').value='';
+  document.getElementById('ps-standings-rows').innerHTML='';
+  // Pre-populate with current players
+  state.players.forEach(p=>addPsStandingRow(p.name));
+  document.getElementById('history-add-season').style.display='';
+  document.getElementById('history-add-btn-wrap').style.display='none';
+  document.getElementById('history-import-panel').style.display='none';
+  document.getElementById('history-alltime-stats').style.display='none';
+  document.getElementById('history-seasons-list').style.display='none';
+}
+function addPsStandingRow(name=''){
+  psStandingCount++;
+  const id=psStandingCount;
+  const el=document.createElement('div');
+  el.id='ps-standing-row-'+id;
+  el.style.cssText='background:var(--surface2);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px;';
+  el.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <input type="text" placeholder="Player name" value="${name}" id="ps-sname-${id}" style="font-size:15px;font-weight:600;padding:6px 10px;flex:1;margin-right:8px;" autocapitalize="words">
+      <button onclick="document.getElementById('ps-standing-row-${id}').remove()" style="font-size:12px;color:var(--danger);background:none;border:1px solid rgba(232,74,74,.3);border-radius:6px;cursor:pointer;padding:4px 10px;white-space:nowrap;">Remove</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);white-space:nowrap;">Final pts</label>
+      <input type="number" min="0" placeholder="0" id="ps-spts-${id}" inputmode="numeric" style="font-size:22px;font-weight:700;text-align:center;padding:6px;flex:1;">
+    </div>`;
+  document.getElementById('ps-standings-rows').appendChild(el);
+}
+function cancelPastSeason(){
+  newSeasonRaces=[];
+  document.getElementById('history-add-season').style.display='none';
+  document.getElementById('history-add-btn-wrap').style.display='';
+  document.getElementById('history-alltime-stats').style.display='';
+  document.getElementById('history-seasons-list').style.display='';
+}
+function renderPsPlayerRows(){
+  const c=document.getElementById('ps-player-rows');
+  c.innerHTML=state.players.map(p=>{
+    const pid='ps_'+p.name.replace(/\s+/g,'_');
+    return`<div class="fast-player" style="margin-bottom:8px">
+      <div class="fast-player-name" style="margin-bottom:8px">${p.name}</div>
+      <div style="margin-bottom:6px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver</label>
+        <select id="${pid}-drv">
+          <option value="">— select —</option>
+          ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}">${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="margin-top:4px;display:flex;gap:8px;align-items:flex-end;">
+        <div style="flex:1"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Points</label><input type="number" min="0" placeholder="0" id="${pid}-pts" inputmode="numeric" style="font-size:22px;font-weight:700;text-align:center;width:100%"></div>
+        <button id="${pid}-win" onclick="togglePsWin('${pid}')" style="padding:10px 14px;border-radius:var(--r-sm);border:1px solid var(--border2);background:transparent;color:var(--text2);font-family:var(--font-display);font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;letter-spacing:.5px;">+10 WIN</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function addPastRace(){
+  // Legacy stub — no longer used, kept for safety
+}
+function savePastSeason(){
+  const year=document.getElementById('ps-year').value.trim();
+  if(!year){toast('Enter a season year or label');return;}
+  // Collect standings rows
+  const rows=[...document.getElementById('ps-standings-rows').children];
+  const standings=[];
+  rows.forEach(row=>{
+    const idNum=row.id.replace('ps-standing-row-','');
+    const name=document.getElementById('ps-sname-'+idNum)?.value.trim();
+    const pts=parseInt(document.getElementById('ps-spts-'+idNum)?.value)||0;
+    if(name) standings.push({name,pts});
+  });
+  if(!standings.length){toast('Add at least one player');return;}
+  const players=standings.map(s=>s.name);
+  // Store as a single "final" race with just the end totals
+  const entries=standings.map(s=>({player:s.name,driver:'—',won:false,pts:s.pts}));
+  const races=[{name:'Season Final',track:'',raceType:'regular',entries,winnerDriver:'',winnerPts:0}];
+  state.pastSeasons.push({year,players,races,isFinalStandings:true});
+  saveState();toast(`Season ${year} saved`);
+  cancelPastSeason();
+}
+
+/* ── EDIT PAST SEASON ── */
+let editSeasonIdx = -1;
+
+function renderEsBonusList(){
+  const season = state.pastSeasons[editSeasonIdx];
+  const el = document.getElementById('es-bonus-list');
+  if(!el) return;
+  // Get all unique player names from this season
+  const players = season.players || state.players.map(p=>p.name);
+  const bonuses = season.playoffBonuses || {};
+  el.innerHTML = players.map(name => {
+    const pid = 'esbonus_' + name.replace(/\s+/g,'_');
+    const val = bonuses[name] || 0;
+    return `<div style="display:grid;grid-template-columns:1fr 100px;gap:8px;align-items:center;margin-bottom:6px;">
+      <div style="font-size:14px;font-weight:600;">${name}</div>
+      <div><input type="number" min="0" id="${pid}" value="${val||''}" placeholder="0" inputmode="numeric"
+        style="font-size:18px;font-weight:700;text-align:center;padding:6px 8px;width:100%"></div>
+    </div>`;
+  }).join('');
+}
+
+function editSeason(idx){
+  editSeasonIdx = idx;
+  const season = state.pastSeasons[idx];
+  document.getElementById('es-year').value = season.year || '';
+  renderEsBonusList();
+  renderEsRacesList();
+  renderEsPlayerRows();
+  setTimeout(()=>populateWinnerDropdown('es-winner-driver'), 0);
+  document.getElementById('history-edit-season').style.display = '';
+  document.getElementById('history-add-btn-wrap').style.display = 'none';
+  document.getElementById('history-alltime-stats').style.display = 'none';
+  document.getElementById('history-seasons-list').style.display = 'none';
+  document.getElementById('history-add-season').style.display = 'none';
+}
+
+function cancelEditSeason(){
+  editSeasonIdx = -1;
+  document.getElementById('history-edit-season').style.display = 'none';
+  document.getElementById('history-add-btn-wrap').style.display = '';
+  document.getElementById('history-alltime-stats').style.display = '';
+  document.getElementById('history-seasons-list').style.display = '';
+}
+
+function renderEsRacesList(){
+  const season = state.pastSeasons[editSeasonIdx];
+  const el = document.getElementById('es-races-list');
+  if(!el) return;
+  if(!(season.races||[]).length){ el.innerHTML='<p class="text-muted text-center" style="padding:8px 0">No races yet</p>'; return; }
+  el.innerHTML = season.races.map((r,ri)=>`
+    <div class="race-chip" style="margin-bottom:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-weight:600;font-size:14px;">${r.name}</div>
+        <button onclick="deleteSeasonRace(${ri})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;">Remove</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+        <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Name</label>
+          <input type="text" value="${r.name}" id="esr-name-${ri}" style="font-size:13px;padding:8px 10px;"></div>
+        <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Track</label>
+          <input type="text" value="${r.track||''}" id="esr-track-${ri}" placeholder="Track name" style="font-size:13px;padding:8px 10px;"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+        <div style="grid-column:1/-1;margin-bottom:4px"><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Type</label>
+          <select id="esr-type-${ri}" style="font-size:13px;padding:8px 10px;">
+            <option value="regular" ${(r.raceType||'regular')==='regular'?'selected':''}>Regular Season</option>
+            <option value="postseason" ${r.raceType==='postseason'?'selected':''}>Post Season</option>
+            <option value="final" ${r.raceType==='final'?'selected':''}>Final Race</option>
+          </select></div>
+        <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">🏆 Winning Driver</label>
+          <select id="esr-wdrv-${ri}" style="font-size:13px;padding:8px 10px;">
+            <option value="">— none —</option>
+            ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${r.winnerDriver===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Winner Pts</label>
+          <input type="number" min="0" value="${r.winnerPts||''}" id="esr-wpts-${ri}" placeholder="0" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center;"></div>
+      </div>
+      <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:6px;">Player Results</div>
+      ${(r.entries||[]).map((e,ei)=>`
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px;align-items:center;">
+          <div style="font-size:13px;font-weight:500;">${e.player}</div>
+          <div><select id="esr-drv-${ri}-${ei}" style="font-size:12px;padding:6px 8px;">
+            <option value="">—</option>
+            ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}" ${e.driver===dName(d)?'selected':''}>${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+          </select></div>
+          <div><input type="number" min="0" value="${e.pts||0}" id="esr-pts-${ri}-${ei}" inputmode="numeric" style="font-size:16px;font-weight:700;text-align:center;padding:6px 8px;"></div>
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+function deleteSeasonRace(ri){
+  if(!confirm('Remove this race from the season?')) return;
+  state.pastSeasons[editSeasonIdx].races.splice(ri,1);
+  saveState(); renderEsRacesList(); toast('Race removed');
+}
+
+function renderEsPlayerRows(){
+  const c=document.getElementById('es-player-rows');
+  if(!c) return;
+  c.innerHTML=state.players.map(p=>{
+    const pid='es_'+p.name.replace(/\s+/g,'_');
+    return`<div class="fast-player" style="margin-bottom:8px;">
+      <div class="fast-player-name" style="margin-bottom:8px">${p.name}</div>
+      <div style="margin-bottom:6px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver</label>
+        <select id="${pid}-drv">
+          <option value="">— select —</option>
+          ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>`<option value="${dName(d)}">${dNum(d)?'#'+dNum(d)+' ':''}${dName(d)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;">
+        <div style="flex:1"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Points</label>
+          <input type="number" min="0" placeholder="0" id="${pid}-pts" inputmode="numeric" style="font-size:22px;font-weight:700;text-align:center;width:100%"></div>
+        <button id="${pid}-win" onclick="togglePsWin('${pid}')" style="padding:10px 14px;border-radius:var(--r-sm);border:1px solid var(--border2);background:transparent;color:var(--text2);font-family:var(--font-display);font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;letter-spacing:.5px;">+10 WIN</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function esAddRace(){
+  const name=document.getElementById('es-race-name').value.trim();
+  const track=document.getElementById('es-track-name').value.trim();
+  if(!name){toast('Enter a race name');return;}
+  const esRaceType=document.getElementById('es-race-type')?.value||'regular';
+  const winnerDriver=document.getElementById('es-winner-driver')?.value||'';
+  const winnerPts=parseInt(document.getElementById('es-winner-pts')?.value)||0;
+  const entries=state.players.map(p=>{
+    const pid='es_'+p.name.replace(/\s+/g,'_');
+    const driver=document.getElementById(pid+'-drv')?.value||'—';
+    const pts=parseInt(document.getElementById(pid+'-pts')?.value)||0;
+    const won=document.getElementById(pid+'-win')?.dataset.won==='1';
+    return{player:p.name,driver,won,pts:calcScore(pts,won)};
+  });
+  state.pastSeasons[editSeasonIdx].races.push({name,track,raceType:esRaceType,entries,winnerDriver,winnerPts});
+  saveState();
+  document.getElementById('es-race-name').value='';
+  document.getElementById('es-track-name').value='';
+  const wd=document.getElementById('es-winner-driver');if(wd)wd.value='';
+  const wp=document.getElementById('es-winner-pts');if(wp)wp.value='';
+  state.players.forEach(p=>{
+    const pid='es_'+p.name.replace(/\s+/g,'_');
+    ['drv','pts'].forEach(f=>{const el=document.getElementById(pid+'-'+f);if(el)el.value='';});
+    const wb=document.getElementById(pid+'-win');
+    if(wb){wb.dataset.won='0';wb.style.background='transparent';wb.style.color='var(--text2)';wb.style.borderColor='var(--border2)';}
+  });
+  renderEsRacesList();toast(`Race added: ${name}`);
+}
+
+function saveEditSeason(){
+  const season=state.pastSeasons[editSeasonIdx];
+  season.year=document.getElementById('es-year').value.trim()||season.year;
+  // Save playoff bonuses
+  const bPlayers = season.players || state.players.map(p=>p.name);
+  const newBonuses = {};
+  bPlayers.forEach(name => {
+    const pid = 'esbonus_' + name.replace(/\s+/g,'_');
+    const val = parseInt(document.getElementById(pid)?.value) || 0;
+    if(val > 0) newBonuses[name] = val;
+  });
+  season.playoffBonuses = newBonuses;
+  // Save all inline edits to existing races
+  (season.races||[]).forEach((r,ri)=>{
+    const nameEl=document.getElementById(`esr-name-${ri}`);
+    const trackEl=document.getElementById(`esr-track-${ri}`);
+    const wdrvEl=document.getElementById(`esr-wdrv-${ri}`);
+    const wptsEl=document.getElementById(`esr-wpts-${ri}`);
+    const typeEl=document.getElementById(`esr-type-${ri}`);
+    if(typeEl)r.raceType=typeEl.value;
+    if(nameEl)r.name=nameEl.value.trim()||r.name;
+    if(trackEl)r.track=trackEl.value.trim();
+    if(wdrvEl)r.winnerDriver=wdrvEl.value;
+    if(wptsEl)r.winnerPts=parseInt(wptsEl.value)||0;
+    (r.entries||[]).forEach((e,ei)=>{
+      const drvEl=document.getElementById(`esr-drv-${ri}-${ei}`);
+      const ptsEl=document.getElementById(`esr-pts-${ri}-${ei}`);
+      if(drvEl)e.driver=drvEl.value||e.driver;
+      if(ptsEl)e.pts=parseInt(ptsEl.value)||0;
+    });
+  });
+  saveState();toast('Season updated');cancelEditSeason();renderHistory();
+}
+
+/* ── CSV IMPORT ── */
+let parsedCsvSeason = null;
+
+function startCsvImport(){
+  parsedCsvSeason = null;
+  document.getElementById('csv-season-year').value = '';
+  document.getElementById('csv-error').textContent = '';
+  document.getElementById('csv-preview').style.display = 'none';
+  document.getElementById('csv-import-btn').style.display = 'none';
+  const fi = document.getElementById('csv-file-input');
+  if(fi) fi.value = '';
+  document.getElementById('history-import-panel').style.display = '';
+  document.getElementById('history-add-btn-wrap').style.display = 'none';
+  document.getElementById('history-alltime-stats').style.display = 'none';
+  document.getElementById('history-seasons-list').style.display = 'none';
+  document.getElementById('history-add-season').style.display = 'none';
+  // Wire file input
+  document.getElementById('csv-file-input').onchange = handleCsvFile;
+}
+
+function cancelCsvImport(){
+  parsedCsvSeason = null;
+  document.getElementById('history-import-panel').style.display = 'none';
+  document.getElementById('history-add-btn-wrap').style.display = '';
+  document.getElementById('history-alltime-stats').style.display = '';
+  document.getElementById('history-seasons-list').style.display = '';
+}
+
+function handleCsvFile(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => parseCsvData(ev.target.result);
+  reader.readAsText(file);
+}
+
+function detectCsvFormat(header){
+  // Format A (simple): Race, Track, Type, WinningDriver, WinnerPts, Player1, Player2...
+  // Format B (advanced): blank, blank, blank, Player1, blank, Player2, blank... (interleaved driver/pts)
+  // Detect by checking if col[0] is blank/empty in header
+  if(!header[0] && !header[1] && !header[2]) return 'advanced';
+  return 'simple';
+}
+
+function parseCsvData(text){
+  const errEl = document.getElementById('csv-error');
+  errEl.textContent = '';
+  parsedCsvSeason = null;
+  document.getElementById('csv-import-btn').style.display = 'none';
+  document.getElementById('csv-preview').style.display = 'none';
+
+  const rows = text.split(/\r?\n/).map(r=>r.trim()).filter(r=>r.length>0);
+  if(rows.length < 2){ errEl.textContent = 'CSV must have a header row and at least one race row.'; return; }
+
+  const header = splitCsvRow(rows[0]);
+  const fmt = detectCsvFormat(header);
+  let players=[], races=[];
+
+  if(fmt === 'advanced'){
+    // Advanced format: ,,,Name1,,Name2,,Name3... with interleaved driver+pts cols
+    // Col 0=blank,1=blank,2=blank/date, then pairs: [3]=name1,[4]=blank,[5]=name2,...
+    // Actually: col3=P1name, col5=P2name, col7=P3name... (every 2)
+    // Race rows: col0=race, col1=track, col2=date, col3=P1driver, col4=P1pts, col5=P2driver...
+    // Find player names from header — non-empty cells starting at index 3, every 2
+    const playerDefs = []; // {name, driverCol, ptsCol}
+    for(let i=3; i<header.length-1; i+=2){
+      const nm = header[i].replace(/\*+$/,'').trim();
+      if(nm && nm.toLowerCase()!=='winner') playerDefs.push({name:nm, driverCol:i, ptsCol:i+1});
+    }
+    if(!playerDefs.length){ errEl.textContent = 'Could not detect players in header row.'; return; }
+    players = playerDefs.map(p=>p.name);
+
+    // Winner col = first col after last player pair that contains 'winner' or is the 13th col
+    const winnerCol = header.findIndex((h,i)=>i>3 && h.toLowerCase().includes('winner'));
+
+    for(let i=1; i<rows.length; i++){
+      const cols = splitCsvRow(rows[i]);
+      const raceName = cols[0]?.trim();
+      if(!raceName) continue;
+      // Skip summary rows
+      if(/regular season|winners picked|points:|bonus|total/i.test(raceName)||/regular season|winners picked|points:|bonus|total/i.test(cols[1]||'')) continue;
+      const track = cols[1]?.trim()||'';
+      const winnerDriver = (winnerCol>=0 && cols[winnerCol]) ? cols[winnerCol].trim() : '';
+      const entries = playerDefs.map(p=>{
+        let driver = cols[p.driverCol]?.trim()||'—';
+        if(driver.toUpperCase()==='FUCK'||!driver) driver='—';
+        const pts = parseInt(cols[p.ptsCol])||0;
+        return{player:p.name, driver, won:false, pts};
+      });
+      races.push({name:raceName, track, raceType:'regular', winnerDriver, winnerPts:0, entries});
+    }
+
+    // Auto-assign race types: last race = final, detect postseason by position
+    // Postseason starts after "Regular Season Total" row
+    let postseasonStart = -1;
+    for(let i=1; i<rows.length; i++){
+      const cols = splitCsvRow(rows[i]);
+      if(/regular season total/i.test(cols[1]||'')){
+        // Count valid race rows before this
+        postseasonStart = races.filter((_,ri)=>ri < i-1).length;
+        // Actually count races added up to this row index
+        let raceCount=0;
+        for(let j=1;j<i;j++){
+          const c2=splitCsvRow(rows[j]);
+          if(c2[0]?.trim()&&!/regular season|winners|points:|bonus|total/i.test(c2[0])&&!/regular season|winners|points:|bonus|total/i.test(c2[1]||''))raceCount++;
+        }
+        postseasonStart=raceCount;
+        break;
+      }
+    }
+    if(postseasonStart>0){
+      races.forEach((r,i)=>{
+        if(i<postseasonStart) r.raceType='regular';
+        else if(i===races.length-1) r.raceType='final';
+        else r.raceType='postseason';
+      });
+    }
+
+  } else {
+    // Simple format: Race, Track, Type, WinningDriver, WinnerPts, Player1, Player2...
+    if(header.length < 6){ errEl.textContent = 'Need at least 6 columns: Race, Track, Type, WinningDriver, WinnerPts, Player1...'; return; }
+    const playerCols = header.slice(5);
+    players = playerCols.map(p=>p.trim());
+    for(let i=1; i<rows.length; i++){
+      const cols = splitCsvRow(rows[i]);
+      if(cols.length < 5) continue;
+      const name = cols[0]||`Race ${i}`;
+      const track = cols[1]||'';
+      const raceType = (['regular','postseason','final'].includes((cols[2]||'').toLowerCase())) ? cols[2].toLowerCase() : 'regular';
+      const winnerDriver = cols[3]||'';
+      const winnerPts = parseInt(cols[4])||0;
+      const entries = playerCols.map((pName,pi)=>({player:pName.trim(),driver:'—',won:false,pts:parseInt(cols[5+pi])||0}));
+      races.push({name, track, raceType, winnerDriver, winnerPts, entries});
+    }
+  }
+
+  if(!races.length){ errEl.textContent = 'No valid race rows found. Check your CSV format.'; return; }
+  parsedCsvSeason = { players, races, fmt };
+
+  const regCount=races.filter(r=>r.raceType==='regular').length;
+  const psCount=races.filter(r=>r.raceType==='postseason').length;
+  const fnCount=races.filter(r=>r.raceType==='final').length;
+  const fmtTag=fmt==='advanced'?'<span class="pill pill-info" style="font-size:9px">Auto-detected format</span>':'';
+
+  document.getElementById('csv-preview-body').innerHTML = `
+    <div style="font-size:13px;margin-bottom:8px;">${fmtTag} <strong>${races.length}</strong> races · Players: <strong>${players.join(', ')}</strong></div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">${regCount} regular · ${psCount} post season · ${fnCount} final</div>
+    ${races.slice(0,3).map(r=>`<div class="race-chip" style="margin-bottom:6px">
+      <div class="race-chip-name">${r.name} <span class="pill pill-muted" style="font-size:9px">${r.raceType}</span></div>
+      ${r.track?`<div style="font-size:12px;color:var(--text2)">${r.track}</div>`:''}
+      ${r.entries.map(e=>`<div class="race-chip-row"><span>${e.player}${e.driver!=='—'?' — '+e.driver:''}</span><span>${e.pts}pts</span></div>`).join('')}
+    </div>`).join('')}
+    ${races.length>3?`<div style="font-size:12px;color:var(--text2);text-align:center;padding:4px 0">+ ${races.length-3} more races…</div>`:''}
+  `;
+  document.getElementById('csv-preview').style.display = '';
+  document.getElementById('csv-import-btn').style.display = '';
+}
+
+function splitCsvRow(row){
+  // Handle quoted fields with commas inside
+  const result = [];
+  let cur = '', inQuote = false;
+  for(let i=0; i<row.length; i++){
+    const ch = row[i];
+    if(ch==='"'){ inQuote=!inQuote; }
+    else if(ch===',' && !inQuote){ result.push(cur.trim()); cur=''; }
+    else { cur+=ch; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function importCsv(){
+  const year = document.getElementById('csv-season-year').value.trim();
+  const errEl = document.getElementById('csv-error');
+  if(!year){ errEl.textContent = 'Enter a season year or label first.'; return; }
+  if(!parsedCsvSeason || !parsedCsvSeason.races.length){ errEl.textContent = 'No data to import.'; return; }
+  state.pastSeasons.push({
+    year,
+    players: parsedCsvSeason.players,
+    races: parsedCsvSeason.races
+  });
+  saveState();
+  toast(`Imported ${parsedCsvSeason.races.length} races for ${year}`);
+  parsedCsvSeason = null;
+  cancelCsvImport();
+  renderHistory();
+}
+
+/* ── DRIVERS ── */
+function renderDriverList(){
+  const el=document.getElementById('driver-mgmt-list');
+  if(!el)return;
+  const sorted=[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b)));
+  el.innerHTML=sorted.map((d,i)=>{
+    const globalIdx=DRIVERS.findIndex(x=>dName(x)===dName(d));
+    const esc=dName(d).replace(/'/g,"\'");
+    return`<div style="background:var(--surface2);border-radius:var(--r-sm);margin-bottom:5px;overflow:hidden;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;">
+        <div style="font-size:14px;font-weight:600">${dNum(d)?`<span style="font-family:var(--font-display);color:var(--accent)">#${dNum(d)}</span> `:''  }${dName(d)}</div>
+        <div style="display:flex;gap:6px;">
+          <button onclick="toggleDriverEdit(${globalIdx})" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:3px 8px;">Edit</button>
+          <button onclick="removeDriver('${esc}')" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 8px;">Remove</button>
+        </div>
+      </div>
+      <div id="driver-edit-${globalIdx}" style="display:none;padding:0 10px 10px;">
+        <div style="display:grid;grid-template-columns:1fr 80px auto;gap:8px;align-items:flex-end;">
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Name</label>
+            <input type="text" id="dedit-name-${globalIdx}" value="${dName(d)}" style="font-size:14px;padding:8px 10px;"></div>
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Car #</label>
+            <input type="text" id="dedit-num-${globalIdx}" value="${dNum(d)}" placeholder="—" inputmode="numeric" style="font-size:16px;font-weight:700;text-align:center;padding:8px 6px;"></div>
+          <button onclick="saveDriverEdit(${globalIdx})" style="padding:8px 12px;border-radius:var(--r-sm);background:var(--accent);color:#0a0a0a;font-family:var(--font-display);font-size:14px;font-weight:700;border:none;cursor:pointer;white-space:nowrap;">Save</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleDriverEdit(idx){
+  const el=document.getElementById('driver-edit-'+idx);
+  if(!el)return;
+  const isOpen=el.style.display!=='none';
+  // Close all others first
+  document.querySelectorAll('[id^="driver-edit-"]').forEach(e=>e.style.display='none');
+  if(!isOpen) el.style.display='';
+}
+function saveDriverEdit(idx){
+  const nameEl=document.getElementById('dedit-name-'+idx);
+  const numEl=document.getElementById('dedit-num-'+idx);
+  if(!nameEl||!numEl)return;
+  const newName=nameEl.value.trim();
+  const newNum=numEl.value.trim();
+  if(!newName){toast('Name cannot be empty');return;}
+  const oldName=dName(DRIVERS[idx]);
+  // Check duplicate (ignore self)
+  if(newName!==oldName && DRIVERS.find((d,i)=>i!==idx&&dName(d).toLowerCase()===newName.toLowerCase())){
+    toast('A driver with that name already exists');return;
+  }
+  // Update name in all race entries if name changed
+  if(newName!==oldName){
+    state.races.forEach(r=>{(r.entries||[]).forEach(e=>{if(e.driver===oldName)e.driver=newName;});if(r.winnerDriver===oldName)r.winnerDriver=newName;});
+    state.pastSeasons.forEach(s=>{(s.races||[]).forEach(r=>{(r.entries||[]).forEach(e=>{if(e.driver===oldName)e.driver=newName;});if(r.winnerDriver===oldName)r.winnerDriver=newName;});});
+    // Update picks
+    Object.keys(state.picks).forEach(p=>{if(state.picks[p]===oldName)state.picks[p]=newName;});
+  }
+  DRIVERS[idx]={name:newName,number:newNum};
+  state.drivers=DRIVERS;
+  saveState();toast(`Updated: #${newNum} ${newName}`);renderDriverList();
+}
+function addDriver(){
+  const name=document.getElementById('new-driver-name').value.trim();
+  const number=document.getElementById('new-driver-number').value.trim();
+  if(!name){toast('Enter a driver name');return;}
+  if(DRIVERS.find(d=>dName(d).toLowerCase()===name.toLowerCase())){toast('Driver already exists');return;}
+  DRIVERS.push({name,number});
+  state.drivers=DRIVERS;
+  saveState();
+  document.getElementById('new-driver-name').value='';
+  document.getElementById('new-driver-number').value='';
+  renderDriverList();toast(`Added ${name}`);
+}
+function removeDriver(name){
+  if(!confirm(`Remove ${name} from the driver list?`))return;
+  DRIVERS=DRIVERS.filter(d=>dName(d)!==name);
+  state.drivers=DRIVERS;
+  saveState();renderDriverList();toast(`Removed ${name}`);
+}
+function retireDriver(name){
+  const d=DRIVERS.find(d=>dName(d)===name);
+  if(!d)return;
+  d.retired=true;
+  state.drivers=DRIVERS;
+  saveState();renderDriverList();toast(`${name} retired`);
+}
+function unretireDriver(name){
+  const d=DRIVERS.find(d=>dName(d)===name);
+  if(!d)return;
+  d.retired=false;
+  state.drivers=DRIVERS;
+  saveState();renderDriverList();toast(`${name} unretired`);
+}
+
+/* ── ADMIN ── */
+function renderAdmin(){
+  renderDriverList();
+  renderAdminSchedule();
+  document.getElementById('player-mgmt-list').innerHTML=state.players.map(p=>{
+    const isMe=p.name===currentUser.name;
+    const isComissioner=p.role==='commissioner';
+    const roleBadge=isComissioner?'<span class="pill pill-gold">Commissioner</span>':p.role==='admin'?'<span class="pill pill-info">Admin</span>':'<span class="pill pill-muted">Player</span>';
+    const toggleBtn=!isComissioner&&!isMe?`<button onclick="toggleAdmin('${p.name}')" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:4px 8px;">${p.role==='admin'?'Revoke admin':'Make admin'}</button>`:'';
+    const removeBtn=!isComissioner&&!isMe?`<button class="remove-btn" onclick="removePlayer('${p.name}')">Remove</button>`:'';
+    const editBtn=`<button onclick="editPlayer('${p.name}')" style="font-size:11px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:6px;cursor:pointer;padding:4px 8px;">Rename</button>`;
+    return`<div class="player-row"><div><div class="player-row-name">${p.name}</div><div style="margin-top:3px">${roleBadge}</div></div><div style="display:flex;gap:6px;align-items:center">${editBtn}${toggleBtn}${removeBtn}</div></div>`;
+  }).join('');
+  // Show commissioner's timezone next to the label
+  const tzLabel=document.getElementById('admin-tz-label');
+  if(tzLabel)tzLabel.textContent='('+Intl.DateTimeFormat().resolvedOptions().timeZone+')';
+  renderAdminPicks();
+}
+function renderAdminPicks(){
+  const el=document.getElementById('admin-picks-list');
+  if(!el)return;
+  const raceMode=currentRaceMode();
+  el.innerHTML=state.players.map(p=>{
+    const pid='admpick_'+p.name.replace(/\s+/g,'_');
+    const currentPick=state.picks[p.name]||'';
+    const used=raceMode==='final'?new Set():usedDrivers(p.name,raceMode);
+    return`<div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px;">
+      <div style="font-weight:600;font-size:14px;margin-bottom:8px;">${p.name}
+        ${currentPick?`<span style="font-size:12px;font-weight:400;color:var(--accent);margin-left:6px;">→ ${currentPick}</span>`:'<span style="font-size:12px;font-weight:400;color:var(--text3);margin-left:6px;">No pick</span>'}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="${pid}-sel" style="flex:1;font-size:13px;padding:8px 10px;">
+          <option value="">— select driver —</option>
+          ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{
+            const isUsed=used.has(dName(d));
+            const val=dName(d);
+            const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);
+            return`<option value="${val}" ${currentPick===val?'selected':''} ${isUsed?'disabled':''}>${isUsed?'✕ ':''}${lbl}${isUsed?' (used)':''}</option>`;
+          }).join('')}
+        </select>
+        <button onclick="setPickForPlayer('${p.name.replace(/'/g,"\'")}','${pid}')" style="padding:8px 14px;border-radius:var(--r-sm);background:var(--accent);color:#0a0a0a;font-family:var(--font-display);font-size:14px;font-weight:700;border:none;cursor:pointer;white-space:nowrap;">Set</button>
+        ${currentPick?`<button onclick="clearPickForPlayer('${p.name.replace(/'/g,"\'")}') " style="padding:8px 10px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--danger);font-size:12px;cursor:pointer;">Clear</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleAdmin(name){
+  const p=state.players.find(p=>p.name===name);
+  if(!p||p.role==='commissioner')return;
+  p.role=p.role==='admin'?'player':'admin';
+  saveState();toast(`${name} is now ${p.role==='admin'?'an admin':'a player'}`);renderAdmin();
+}
+function editPlayer(name){
+  const p=state.players.find(p=>p.name===name);
+  if(!p)return;
+  const newName=prompt('Enter new name for '+name+':',name);
+  if(!newName||newName.trim()===name)return;
+  const trimmed=newName.trim();
+  if(state.players.find(p=>p.name.toLowerCase()===trimmed.toLowerCase()&&p.name!==name)){
+    toast('That name is already taken');return;
+  }
+  // Update picks key
+  if(state.picks[name]!==undefined){state.picks[trimmed]=state.picks[name];delete state.picks[name];}
+  // Update race entries
+  state.races.forEach(r=>{(r.entries||[]).forEach(e=>{if(e.player===name)e.player=trimmed;});});
+  // Update past season entries
+  state.pastSeasons.forEach(s=>{
+    if(s.players)s.players=s.players.map(n=>n===name?trimmed:n);
+    (s.races||[]).forEach(r=>{(r.entries||[]).forEach(e=>{if(e.player===name)e.player=trimmed;});});
+  });
+  p.name=trimmed;
+  if(currentUser.name===name)currentUser=p;
+  saveState();toast(`Renamed to ${trimmed}`);renderAdmin();
+}
+function addPlayer(){
+  const name=document.getElementById('new-pname').value.trim();
+  const pass=document.getElementById('new-ppass').value;
+  if(!name||!pass){toast('Enter name and password');return;}
+  if(state.players.find(p=>p.name.toLowerCase()===name.toLowerCase())){toast('Player already exists');return;}
+  state.players.push({name,password:pass,role:'player'});
+  saveState();
+  document.getElementById('new-pname').value='';
+  document.getElementById('new-ppass').value='';
+  toast(`Added ${name}`);renderAdmin();
+}
+function removePlayer(name){
+  state.players=state.players.filter(p=>p.name!==name);
+  delete state.picks[name];
+  saveState();toast(`Removed ${name}`);renderAdmin();
+}
+function addScheduledRace(){
+  const name=document.getElementById('admin-race-name').value.trim();
+  const track=document.getElementById('admin-track-name').value.trim();
+  const rawDeadline=document.getElementById('admin-deadline').value;
+  const raceType=document.getElementById('admin-playoff-mode').value;
+  if(!name){toast('Enter a race name');return;}
+  const deadline=rawDeadline?new Date(rawDeadline).toISOString():'';
+  if(!state.schedule) state.schedule=[];
+  const network=document.getElementById('admin-tv-network').value;
+  state.schedule.push({name,track,deadline,raceType,network});
+  // Always keep schedule sorted by deadline date
+  sortSchedule();
+  syncNextRaceFromSchedule();
+  // Clear inputs
+  document.getElementById('admin-race-name').value='';
+  document.getElementById('admin-track-name').value='';
+  document.getElementById('admin-deadline').value='';
+  document.getElementById('admin-playoff-mode').value='regular';
+  document.getElementById('admin-tv-network').value='';
+  saveState();toast(`${name} added to schedule`);renderAdmin();
+}
+function tvNetworkBadge(network){
+  if(!network) return '';
+  const styles={
+    'FOX':   'background:#003087;color:#fff;',
+    'FS1':   'background:#003087;color:#fff;',
+    'NBC':   'background:#ffc72c;color:#000;',
+    'USA':   'background:#00aeef;color:#fff;',
+    'Prime': 'background:#00a8e0;color:#fff;',
+    'TNT':   'background:#0098d4;color:#fff;',
+  };
+  const labels={'FOX':'FOX','FS1':'FS1','NBC':'NBC','USA':'USA','Prime':'PRIME','TNT':'TNT'};
+  const style=styles[network]||'background:var(--surface3);color:var(--text2);';
+  const label=labels[network]||network;
+  return `<span style="font-family:var(--font-display);font-size:11px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;${style}">${label}</span>`;
+}
+
+function sortSchedule(){
+  if(!state.schedule||!state.schedule.length) return;
+  state.schedule.sort((a,b)=>{
+    // Races with no deadline go to the end
+    if(!a.deadline&&!b.deadline) return 0;
+    if(!a.deadline) return 1;
+    if(!b.deadline) return -1;
+    return new Date(a.deadline)-new Date(b.deadline);
+  });
+}
+
+function syncNextRaceFromSchedule(){
+  if(!state.schedule||!state.schedule.length){
+    state.nextRace='';state.nextTrack='';state.deadline='';state.nextRaceType='regular';
+    return;
+  }
+  const next=state.schedule[0];
+  state.nextRace=next.name;
+  state.nextTrack=next.track||'';
+  state.deadline=next.deadline||'';
+  state.nextRaceType=next.raceType||'regular';
+}
+function removeScheduledRace(i){
+  state.schedule.splice(i,1);
+  syncNextRaceFromSchedule();
+  saveState();toast('Race removed from schedule');renderAdmin();
+}
+function moveScheduledRace(i,dir){
+  const j=i+dir;
+  if(j<0||j>=state.schedule.length)return;
+  [state.schedule[i],state.schedule[j]]=[state.schedule[j],state.schedule[i]];
+  syncNextRaceFromSchedule();
+  saveState();renderAdmin();
+}
+function renderAdminSchedule(){
+  const el=document.getElementById('admin-schedule-list');
+  if(!el)return;
+  if(!state.schedule||!state.schedule.length){
+    el.innerHTML='<p style="font-size:13px;color:var(--text3);text-align:center;padding:4px 0;">No races scheduled yet</p>';
+    return;
+  }
+  el.innerHTML=state.schedule.map((r,i)=>{
+    const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'No deadline';
+    let dlLocal='';
+    if(r.deadline){const d=new Date(r.deadline);const pad=n=>String(n).padStart(2,'0');dlLocal=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;}
+    const typeLabel={'regular':'Reg','postseason':'Post','final':'Final'}[r.raceType]||'Reg';
+    const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
+    return`<div style="background:${i===0?'rgba(232,200,74,.06)':'var(--surface2)'};border:1px solid ${i===0?'rgba(232,200,74,.2)':'var(--border)'};border-radius:var(--r-sm);padding:10px 12px;margin-bottom:6px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          ${i===0?'<span style="font-size:10px;color:var(--accent);font-family:var(--font-display);font-weight:700;letter-spacing:1px;">NEXT</span>':'<span style="font-size:11px;color:var(--text3);">${i+1}.</span>'}
+          <span style="font-size:14px;font-weight:600;">${r.name}</span>
+          <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span>
+          ${r.network?tvNetworkBadge(r.network):''}
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button onclick="toggleScheduleEdit(${i})" style="font-size:11px;padding:3px 8px;border-radius:5px;background:none;border:1px solid rgba(74,158,232,.3);color:var(--info);cursor:pointer;">Edit</button>
+          <button onclick="removeScheduledRace(${i})" style="font-size:11px;padding:3px 8px;border-radius:5px;background:none;border:1px solid rgba(232,74,74,.3);color:var(--danger);cursor:pointer;">✕</button>
+        </div>
+      </div>
+      ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
+      <div style="font-size:11px;color:var(--text3);margin-top:2px;">🔒 ${dl}</div>
+      <div id="sched-edit-${i}" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Name</label>
+            <input type="text" id="sched-name-${i}" value="${r.name.replace(/"/g,'&quot;')}" style="font-size:13px;padding:8px 10px;width:100%"></div>
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Track</label>
+            <input type="text" id="sched-track-${i}" value="${(r.track||'').replace(/"/g,'&quot;')}" placeholder="Track name" style="font-size:13px;padding:8px 10px;width:100%"></div>
+        </div>
+        <div style="margin-bottom:8px;"><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Picks Deadline</label>
+          <input type="datetime-local" id="sched-deadline-${i}" value="${dlLocal}" style="font-size:13px;padding:8px 10px;width:100%"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Type</label>
+            <select id="sched-type-${i}" style="font-size:13px;padding:8px 10px;width:100%">
+              <option value="regular" ${(r.raceType||'regular')==='regular'?'selected':''}>Regular Season</option>
+              <option value="postseason" ${r.raceType==='postseason'?'selected':''}>Post Season</option>
+              <option value="final" ${r.raceType==='final'?'selected':''}>Final Race</option>
+            </select></div>
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">TV Network</label>
+            <select id="sched-network-${i}" style="font-size:13px;padding:8px 10px;width:100%">
+              <option value="" ${!r.network?'selected':''}>— none —</option>
+              <option value="FOX" ${r.network==='FOX'?'selected':''}>FOX</option>
+              <option value="FS1" ${r.network==='FS1'?'selected':''}>FS1</option>
+              <option value="NBC" ${r.network==='NBC'?'selected':''}>NBC</option>
+              <option value="USA" ${r.network==='USA'?'selected':''}>USA Network</option>
+              <option value="Prime" ${r.network==='Prime'?'selected':''}>Prime Video</option>
+              <option value="TNT" ${r.network==='TNT'?'selected':''}>TNT Sports</option>
+            </select></div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="saveScheduleEdit(${i})" style="flex:1;padding:9px;border-radius:var(--r-sm);background:var(--accent);color:#0a0a0a;font-family:var(--font-display);font-size:15px;font-weight:700;border:none;cursor:pointer;">Save</button>
+          <button onclick="toggleScheduleEdit(${i})" style="padding:9px 14px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--text2);font-size:13px;cursor:pointer;">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleScheduleEdit(i){
+  const el=document.getElementById('sched-edit-'+i);
+  if(el) el.style.display=el.style.display==='none'?'':'none';
+}
+function saveScheduleEdit(i){
+  const name=document.getElementById('sched-name-'+i)?.value.trim();
+  const track=document.getElementById('sched-track-'+i)?.value.trim();
+  const rawDl=document.getElementById('sched-deadline-'+i)?.value;
+  const raceType=document.getElementById('sched-type-'+i)?.value||'regular';
+  const network=document.getElementById('sched-network-'+i)?.value||'';
+  if(!name){toast('Race name required');return;}
+  state.schedule[i]={name,track:track||'',deadline:rawDl?new Date(rawDl).toISOString():'',raceType,network};
+  sortSchedule();
+  syncNextRaceFromSchedule();
+  saveState();
+  toast('Race updated');
+  renderAdmin();
+}
+// Keep saveRaceSetup as a no-op for safety
+function saveRaceSetup(){
+  syncNextRaceFromSchedule();
+  saveState();toast('Schedule saved');
+}
+
+/* ── CHANGE PASSWORD ── */
+function changePassword(){
+  const cur=document.getElementById('pw-current').value;
+  const nw=document.getElementById('pw-new').value;
+  const cf=document.getElementById('pw-confirm').value;
+  const err=document.getElementById('pw-error');err.textContent='';
+  if(cur!==currentUser.password){err.textContent='Current password is incorrect';return;}
+  if(nw.length<4){err.textContent='Must be at least 4 characters';return;}
+  if(nw!==cf){err.textContent='Passwords do not match';return;}
+  state.players.find(p=>p.name===currentUser.name).password=nw;
+  currentUser.password=nw;saveState();
+  document.getElementById('pw-current').value='';
+  document.getElementById('pw-new').value='';
+  document.getElementById('pw-confirm').value='';
+  toast('Password updated');
+}
+
+/* ── EXPOSE GLOBALS for inline onclick handlers ── */
+window.doLogin=doLogin; window.doLogout=doLogout;
+window.showTab=showTab; window.savePick=savePick;
+window.setResultMode=setResultMode; window.updatePreview=updatePreview;
+window.toggleWin=toggleWin; window.togglePsWin=togglePsWin;
+window.submitResults=submitResults; window.deleteRace=deleteRace;
+window.toggleSeason=toggleSeason; window.showRaceDetail=showRaceDetail;
+window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEditSeason=cancelEditSeason; window.handleCsvImport=handleCsvImport; window.cancelCsvImport=cancelCsvImport; window.confirmCsvImport=confirmCsvImport; window.startCsvImport=startCsvImport; window.cancelCsvImport=cancelCsvImport; window.importCsv=importCsv; window.saveEditSeason=saveEditSeason; window.esAddRace=esAddRace; window.deleteSeasonRace=deleteSeasonRace; window.startPastSeason=startPastSeason;
+window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace; window.addPsStandingRow=addPsStandingRow;
+window.savePastSeason=savePastSeason; window.addDriver=addDriver;
+window.removeDriver=removeDriver; window.retireDriver=retireDriver; window.unretireDriver=unretireDriver; window.toggleDriverEdit=toggleDriverEdit; window.saveDriverEdit=saveDriverEdit; window.addPlayer=addPlayer;
+function setPickForPlayer(playerName, pid){
+  const sel=document.getElementById(pid+'-sel');
+  if(!sel||!sel.value){toast('Select a driver first');return;}
+  const raceMode=currentRaceMode();
+  const used=raceMode==='final'?new Set():usedDrivers(playerName,raceMode);
+  if(used.has(sel.value)){toast(`${playerName} already used that driver`);return;}
+  state.picks[playerName]=sel.value;
+  saveState();toast(`Set ${playerName}'s pick: ${sel.value}`);renderAdminPicks();
+}
+function clearPickForPlayer(playerName){
+  delete state.picks[playerName];
+  saveState();toast(`Cleared ${playerName}'s pick`);renderAdminPicks();
+}
+window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
+window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup; window.addScheduledRace=addScheduledRace; window.removeScheduledRace=removeScheduledRace; window.moveScheduledRace=moveScheduledRace; window.toggleScheduleEdit=toggleScheduleEdit; window.saveScheduleEdit=saveScheduleEdit;
+window.changePassword=changePassword; window.requestNotifyPermission=requestNotifyPermission; window.tvNetworkBadge=tvNetworkBadge; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
 
 /* ── BOOT ── */
 document.getElementById('login-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('login-pass').focus();});
 document.getElementById('login-pass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 initFirestore();
-</script>
-<script>
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('./sw.js').then(reg => {
-    reg.addEventListener('updatefound', () => {
-      const newWorker = reg.installing;
-      newWorker.addEventListener('statechange', () => {
-        if(newWorker.state === 'installed' && navigator.serviceWorker.controller){
-          // New version available — reload silently to get it
-          navigator.serviceWorker.addEventListener('controllerchange', () => {
-            window.location.reload();
-          });
-          newWorker.postMessage({type:'SKIP_WAITING'});
-        }
-      });
-    });
-  });
-}
 </script>
 <script>
 if('serviceWorker' in navigator){
