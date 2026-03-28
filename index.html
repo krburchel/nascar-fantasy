@@ -394,12 +394,24 @@ select option:disabled{color:var(--text3);}
         <div class="input-group" style="margin-bottom:8px"><label>Race Name</label><input type="text" id="admin-race-name" placeholder="e.g. Talladega 500"></div>
         <div class="input-group" style="margin-bottom:8px"><label>Track</label><input type="text" id="admin-track-name" placeholder="e.g. Talladega Superspeedway"></div>
         <div class="input-group" style="margin-bottom:8px"><label>Picks Deadline <span id="admin-tz-label" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--info);font-size:11px;"></span></label><input type="datetime-local" id="admin-deadline"></div>
-        <div class="input-group" style="margin-bottom:10px">
+        <div class="input-group" style="margin-bottom:8px">
           <label>Race Type</label>
           <select id="admin-playoff-mode">
             <option value="regular">Regular Season (season-wide driver lock)</option>
             <option value="postseason">Post Season (post season driver lock)</option>
             <option value="final">Final Race (all drivers available)</option>
+          </select>
+        </div>
+        <div class="input-group" style="margin-bottom:10px">
+          <label>TV Network</label>
+          <select id="admin-tv-network">
+            <option value="">— select —</option>
+            <option value="FOX">FOX</option>
+            <option value="FS1">FS1</option>
+            <option value="NBC">NBC</option>
+            <option value="USA">USA Network</option>
+            <option value="Prime">Prime Video</option>
+            <option value="TNT">TNT Sports</option>
           </select>
         </div>
         <button class="btn btn-primary" onclick="addScheduledRace()">Add to Schedule</button>
@@ -503,7 +515,7 @@ function dLastName(d){
   return parts[parts.length-1].toLowerCase();
 }
 
-let state=null, currentUser=null, countdownTimer=null, _saveTimer=null;
+let state=null, currentUser=null, countdownTimer=null, _saveTimer=null, _notifiedDeadline=null;
 
 function defaultState(){
   return{
@@ -538,6 +550,8 @@ async function initFirestore(){
     if(!data.picks) data.picks={};
   if(!data.playoffBonuses) data.playoffBonuses={};
   if(!data.schedule) data.schedule=[];
+  // Sort schedule by deadline on every load
+  if(data.schedule.length>1) data.schedule.sort((a,b)=>{if(!a.deadline&&!b.deadline)return 0;if(!a.deadline)return 1;if(!b.deadline)return -1;return new Date(a.deadline)-new Date(b.deadline);});
     if(!data.races) data.races=[];
     state = data;
     DRIVERS = state.drivers;
@@ -609,6 +623,7 @@ function enterApp(){
   document.getElementById('login-screen').classList.remove('active');
   document.getElementById('main-screen').classList.add('active');
   document.getElementById('main-screen').style.display='';
+  requestNotifyPermission();
   const isComm=currentUser.role==='commissioner'||currentUser.role==='admin';
   document.getElementById('nav-results').style.display=isComm?'':'none';
   document.getElementById('nav-admin').style.display=isComm?'':'none';
@@ -806,11 +821,31 @@ function renderCountdown(){
     h+=`<div class="countdown-digits" id="cd-digits">—</div><div style="font-size:11px;color:var(--text2);margin-top:8px">Locks ${dlLocal} (your time)</div>`;
   }
   if(noPick&&!isLocked)h+=`<div class="pill pill-danger" style="margin-top:10px;display:inline-block">No pick set yet</div>`;
+  if('Notification' in window&&Notification.permission==='default')h+=`<div style="margin-top:10px"><button onclick="requestNotifyPermission()" style="font-size:12px;padding:5px 12px;border-radius:6px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">🔔 Enable deadline alerts</button></div>`;
+  if('Notification' in window&&Notification.permission==='granted'&&!isLocked)h+=`<div style="margin-top:8px;font-size:11px;color:var(--text3);">🔔 You'll be alerted 1 hour before picks lock</div>`;
   const nm=currentRaceMode();
   if(nm==='postseason')h+=`<div class="pill pill-gold" style="margin-top:10px;display:inline-block;margin-left:6px">Post Season</div>`;
   if(nm==='final')h+=`<div class="pill pill-danger" style="margin-top:10px;display:inline-block;margin-left:6px">Final Race</div>`;
   el.innerHTML=h;
 }
+function requestNotifyPermission(){
+  if(!('Notification' in window))return;
+  if(Notification.permission==='default'){
+    Notification.requestPermission();
+  }
+}
+
+function sendPicksAlert(raceName){
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  const n=new Notification('⏰ 1 Hour to Lock Picks!',{
+    body:`Picks for ${raceName} lock in 1 hour. Get your pick in!`,
+    icon:'https://krburchel.github.io/nascar-fantasy/icon-192.png',
+    tag:'picks-deadline',
+    requireInteraction:true
+  });
+  n.onclick=()=>{window.focus();n.close();};
+}
+
 function startCountdown(){
   clearInterval(countdownTimer);
   countdownTimer=setInterval(()=>{
@@ -818,6 +853,15 @@ function startCountdown(){
     const diff=dl-new Date();const digits=document.getElementById('cd-digits');
     if(!digits){clearInterval(countdownTimer);return;}
     if(diff<=0){renderCountdown();clearInterval(countdownTimer);return;}
+    // Fire 1-hour alert once per deadline
+    const oneHour=3600000;
+    if(diff<=oneHour&&diff>oneHour-2000&&_notifiedDeadline!==state.deadline){
+      _notifiedDeadline=state.deadline;
+      // Only alert if user hasn't picked yet
+      if(!state.picks[currentUser?.name]){
+        sendPicksAlert(state.nextRace||'the next race');
+      }
+    }
     const d=Math.floor(diff/86400000),h=Math.floor((diff%86400000)/3600000),m=Math.floor((diff%3600000)/60000),s=Math.floor((diff%60000)/1000);
     const unit=(n,l)=>`<div class="cd-unit"><div class="cd-num">${String(n).padStart(2,'0')}</div><div class="cd-lbl">${l}</div></div>`;
     const sep=`<div class="cd-sep">:</div>`;
@@ -1978,16 +2022,46 @@ function addScheduledRace(){
   if(!name){toast('Enter a race name');return;}
   const deadline=rawDeadline?new Date(rawDeadline).toISOString():'';
   if(!state.schedule) state.schedule=[];
-  state.schedule.push({name,track,deadline,raceType});
-  // First race in schedule becomes the active next race
+  const network=document.getElementById('admin-tv-network').value;
+  state.schedule.push({name,track,deadline,raceType,network});
+  // Always keep schedule sorted by deadline date
+  sortSchedule();
   syncNextRaceFromSchedule();
   // Clear inputs
   document.getElementById('admin-race-name').value='';
   document.getElementById('admin-track-name').value='';
   document.getElementById('admin-deadline').value='';
   document.getElementById('admin-playoff-mode').value='regular';
+  document.getElementById('admin-tv-network').value='';
   saveState();toast(`${name} added to schedule`);renderAdmin();
 }
+function tvNetworkBadge(network){
+  if(!network) return '';
+  const styles={
+    'FOX':   'background:#003087;color:#fff;',
+    'FS1':   'background:#003087;color:#fff;',
+    'NBC':   'background:#ffc72c;color:#000;',
+    'USA':   'background:#00aeef;color:#fff;',
+    'Prime': 'background:#00a8e0;color:#fff;',
+    'TNT':   'background:#0098d4;color:#fff;',
+  };
+  const labels={'FOX':'FOX','FS1':'FS1','NBC':'NBC','USA':'USA','Prime':'PRIME','TNT':'TNT'};
+  const style=styles[network]||'background:var(--surface3);color:var(--text2);';
+  const label=labels[network]||network;
+  return `<span style="font-family:var(--font-display);font-size:11px;font-weight:800;letter-spacing:1px;padding:2px 7px;border-radius:4px;${style}">${label}</span>`;
+}
+
+function sortSchedule(){
+  if(!state.schedule||!state.schedule.length) return;
+  state.schedule.sort((a,b)=>{
+    // Races with no deadline go to the end
+    if(!a.deadline&&!b.deadline) return 0;
+    if(!a.deadline) return 1;
+    if(!b.deadline) return -1;
+    return new Date(a.deadline)-new Date(b.deadline);
+  });
+}
+
 function syncNextRaceFromSchedule(){
   if(!state.schedule||!state.schedule.length){
     state.nextRace='';state.nextTrack='';state.deadline='';state.nextRaceType='regular';
@@ -2024,14 +2098,13 @@ function renderAdminSchedule(){
     const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
     return`<div style="background:${i===0?'rgba(232,200,74,.06)':'var(--surface2)'};border:1px solid ${i===0?'rgba(232,200,74,.2)':'var(--border)'};border-radius:var(--r-sm);padding:10px 12px;margin-bottom:6px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-        <div style="display:flex;align-items:center;gap:6px;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           ${i===0?'<span style="font-size:10px;color:var(--accent);font-family:var(--font-display);font-weight:700;letter-spacing:1px;">NEXT</span>':'<span style="font-size:11px;color:var(--text3);">${i+1}.</span>'}
           <span style="font-size:14px;font-weight:600;">${r.name}</span>
           <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span>
+          ${r.network?tvNetworkBadge(r.network):''}
         </div>
         <div style="display:flex;gap:4px;">
-          ${i>0?`<button onclick="moveScheduledRace(${i},-1)" style="font-size:12px;padding:3px 7px;border-radius:5px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">↑</button>`:''}
-          ${i<state.schedule.length-1?`<button onclick="moveScheduledRace(${i},1)" style="font-size:12px;padding:3px 7px;border-radius:5px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">↓</button>`:''}
           <button onclick="removeScheduledRace(${i})" style="font-size:11px;padding:3px 8px;border-radius:5px;background:none;border:1px solid rgba(232,74,74,.3);color:var(--danger);cursor:pointer;">✕</button>
         </div>
       </div>
@@ -2089,7 +2162,7 @@ function clearPickForPlayer(playerName){
 }
 window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
 window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup; window.addScheduledRace=addScheduledRace; window.removeScheduledRace=removeScheduledRace; window.moveScheduledRace=moveScheduledRace;
-window.changePassword=changePassword; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
+window.changePassword=changePassword; window.requestNotifyPermission=requestNotifyPermission; window.tvNetworkBadge=tvNetworkBadge; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
 
 /* ── BOOT ── */
 document.getElementById('login-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('login-pass').focus();});
