@@ -205,6 +205,10 @@ select option:disabled{color:var(--text3);}
       <div class="card-title">Last Race</div>
       <div id="last-race-content"></div>
     </div>
+    <div class="card" id="upcoming-schedule-card" style="display:none">
+      <div class="card-title">Upcoming Races</div>
+      <div id="upcoming-schedule-list"></div>
+    </div>
   </div>
 
   <!-- PICKS -->
@@ -383,19 +387,23 @@ select option:disabled{color:var(--text3);}
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Next Race</div>
-      <div class="input-group" style="margin-bottom:10px"><label>Race Name</label><input type="text" id="admin-race-name" placeholder="e.g. Talladega 500"></div>
-      <div class="input-group" style="margin-bottom:10px"><label>Track</label><input type="text" id="admin-track-name" placeholder="e.g. Talladega Superspeedway"></div>
-      <div class="input-group" style="margin-bottom:12px"><label>Picks Deadline <span id="admin-tz-label" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--info);font-size:11px;"></span></label><input type="datetime-local" id="admin-deadline"></div>
-      <div class="input-group" style="margin-bottom:12px">
-        <label>Next Race Type</label>
-        <select id="admin-playoff-mode">
-          <option value="regular">Regular Season (season-wide driver lock)</option>
-          <option value="postseason">Post Season (post season driver lock)</option>
-          <option value="final">Final Race (all drivers available)</option>
-        </select>
+      <div class="card-title">Schedule</div>
+      <div id="admin-schedule-list" style="margin-bottom:12px;"></div>
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;">
+        <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:10px;">Add Race</div>
+        <div class="input-group" style="margin-bottom:8px"><label>Race Name</label><input type="text" id="admin-race-name" placeholder="e.g. Talladega 500"></div>
+        <div class="input-group" style="margin-bottom:8px"><label>Track</label><input type="text" id="admin-track-name" placeholder="e.g. Talladega Superspeedway"></div>
+        <div class="input-group" style="margin-bottom:8px"><label>Picks Deadline <span id="admin-tz-label" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--info);font-size:11px;"></span></label><input type="datetime-local" id="admin-deadline"></div>
+        <div class="input-group" style="margin-bottom:10px">
+          <label>Race Type</label>
+          <select id="admin-playoff-mode">
+            <option value="regular">Regular Season (season-wide driver lock)</option>
+            <option value="postseason">Post Season (post season driver lock)</option>
+            <option value="final">Final Race (all drivers available)</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="addScheduledRace()">Add to Schedule</button>
       </div>
-      <button class="btn btn-primary" onclick="saveRaceSetup()">Save</button>
     </div>
     <div class="card">
       <div class="card-title">Set Player Picks</div>
@@ -501,7 +509,7 @@ function defaultState(){
   return{
     players:[{name:'Commissioner',password:'admin',role:'commissioner'}],
     nextRace:'',nextTrack:'',deadline:'',playoffMode:false,
-    picks:{},races:[],pastSeasons:[],playoffBonuses:{},
+    picks:{},races:[],pastSeasons:[],playoffBonuses:{},schedule:[],
     drivers:[...DEFAULT_DRIVERS]
   };
 }
@@ -529,6 +537,7 @@ async function initFirestore(){
     data.drivers = data.drivers.map(d=>typeof d==='string'?{name:d,number:''}:d);
     if(!data.picks) data.picks={};
   if(!data.playoffBonuses) data.playoffBonuses={};
+  if(!data.schedule) data.schedule=[];
     if(!data.races) data.races=[];
     state = data;
     DRIVERS = state.drivers;
@@ -745,6 +754,7 @@ function renderLeaderboard(){
     const trophyHtml=trophies?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophies}</div>`:'';
     return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}${role}</div><div class="standing-driver">${pick}${bonus}</div>${subPts}${trophyHtml}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
   }).join(''):'<p class="text-muted text-center">Add players in Admin to get started</p>';
+  renderUpcomingSchedule();
   const lrc=document.getElementById('last-race-card');
   if(state.races.length){
     const last=state.races[state.races.length-1];lrc.style.display='';
@@ -757,6 +767,28 @@ function renderLeaderboard(){
       }).join('');
   }else lrc.style.display='none';
 }
+function renderUpcomingSchedule(){
+  const card=document.getElementById('upcoming-schedule-card');
+  const list=document.getElementById('upcoming-schedule-list');
+  if(!card||!list)return;
+  // Show races after the first one (first is already shown in countdown)
+  const upcoming=(state.schedule||[]).slice(1);
+  if(!upcoming.length){card.style.display='none';return;}
+  card.style.display='';
+  list.innerHTML=upcoming.map((r,i)=>{
+    const typeLabel={'regular':'Regular','postseason':'Post Season','final':'Final Race'}[r.raceType]||'Regular';
+    const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
+    const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
+    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}">
+      <div>
+        <div style="font-size:14px;font-weight:600;">${r.name} <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span></div>
+        ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
+        ${dl?`<div style="font-size:11px;color:var(--text3);">🔒 ${dl}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderCountdown(){
   const el=document.getElementById('countdown-section');
   const dl=state.deadline?new Date(state.deadline):null;
@@ -948,7 +980,7 @@ function submitResults(){
     return{player:p.name,driver,won,pts:calcScore(pts,won)};
   });
   state.races.push({name,track,raceType,entries,backfill:isBackfill,winnerDriver,winnerPts});
-  if(!isBackfill){state.picks={};state.nextRace='';state.nextTrack='';state.deadline='';}
+  if(!isBackfill){state.picks={};if(state.schedule&&state.schedule.length)state.schedule.shift();syncNextRaceFromSchedule();}
   saveState();toast(`${isBackfill?'Past race':'Race'} saved: ${name}`);
   document.getElementById('res-race-name').value='';
   document.getElementById('res-track-name').value='';
@@ -1049,11 +1081,11 @@ function closeSeason(){
   });
   state.races=[];state.picks={};state.nextRace='';state.nextTrack='';
   state.deadline='';state.seasonClosed=false;
-  state.playoffBonuses={};state.regularSeasonArchive=[];
+  state.playoffBonuses={};state.regularSeasonArchive=[];state.schedule=[];
   saveState();toast('Season closed and archived');renderResults();renderLeaderboard();
 }
 function openNewSeason(){
-  state.seasonClosed=false;state.playoffBonuses={};state.regularSeasonArchive=[];
+  state.seasonClosed=false;state.playoffBonuses={};state.regularSeasonArchive=[];state.schedule=[];
   state.races=[];state.picks={};state.nextRace='';state.nextTrack='';state.deadline='';
   saveState();toast('New season started');renderResults();renderLeaderboard();
 }
@@ -1851,6 +1883,7 @@ function unretireDriver(name){
 /* ── ADMIN ── */
 function renderAdmin(){
   renderDriverList();
+  renderAdminSchedule();
   document.getElementById('player-mgmt-list').innerHTML=state.players.map(p=>{
     const isMe=p.name===currentUser.name;
     const isComissioner=p.role==='commissioner';
@@ -1860,23 +1893,9 @@ function renderAdmin(){
     const editBtn=`<button onclick="editPlayer('${p.name}')" style="font-size:11px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:6px;cursor:pointer;padding:4px 8px;">Rename</button>`;
     return`<div class="player-row"><div><div class="player-row-name">${p.name}</div><div style="margin-top:3px">${roleBadge}</div></div><div style="display:flex;gap:6px;align-items:center">${editBtn}${toggleBtn}${removeBtn}</div></div>`;
   }).join('');
-  const rn=document.getElementById('admin-race-name');
-  const tn=document.getElementById('admin-track-name');
-  const dl=document.getElementById('admin-deadline');
-  const pm=document.getElementById('admin-playoff-mode');
-  if(rn)rn.value=state.nextRace||'';
-  if(tn)tn.value=state.nextTrack||'';
-  // Convert stored UTC ISO back to local time for datetime-local input
-  if(dl&&state.deadline){
-    const d=new Date(state.deadline);
-    const pad=n=>String(n).padStart(2,'0');
-    const local=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    dl.value=local;
-  }
   // Show commissioner's timezone next to the label
   const tzLabel=document.getElementById('admin-tz-label');
   if(tzLabel)tzLabel.textContent='('+Intl.DateTimeFormat().resolvedOptions().timeZone+')';
-  if(pm)pm.value=state.nextRaceType||'regular';
   renderAdminPicks();
 }
 function renderAdminPicks(){
@@ -1951,14 +1970,80 @@ function removePlayer(name){
   delete state.picks[name];
   saveState();toast(`Removed ${name}`);renderAdmin();
 }
-function saveRaceSetup(){
-  state.nextRace=document.getElementById('admin-race-name').value.trim();
-  state.nextTrack=document.getElementById('admin-track-name').value.trim();
+function addScheduledRace(){
+  const name=document.getElementById('admin-race-name').value.trim();
+  const track=document.getElementById('admin-track-name').value.trim();
   const rawDeadline=document.getElementById('admin-deadline').value;
-  // Store as ISO string (UTC) so all users compare against same moment
-  state.deadline=rawDeadline ? new Date(rawDeadline).toISOString() : '';
-  state.nextRaceType=document.getElementById('admin-playoff-mode').value;
-  saveState();toast('Race setup saved');
+  const raceType=document.getElementById('admin-playoff-mode').value;
+  if(!name){toast('Enter a race name');return;}
+  const deadline=rawDeadline?new Date(rawDeadline).toISOString():'';
+  if(!state.schedule) state.schedule=[];
+  state.schedule.push({name,track,deadline,raceType});
+  // First race in schedule becomes the active next race
+  syncNextRaceFromSchedule();
+  // Clear inputs
+  document.getElementById('admin-race-name').value='';
+  document.getElementById('admin-track-name').value='';
+  document.getElementById('admin-deadline').value='';
+  document.getElementById('admin-playoff-mode').value='regular';
+  saveState();toast(`${name} added to schedule`);renderAdmin();
+}
+function syncNextRaceFromSchedule(){
+  if(!state.schedule||!state.schedule.length){
+    state.nextRace='';state.nextTrack='';state.deadline='';state.nextRaceType='regular';
+    return;
+  }
+  const next=state.schedule[0];
+  state.nextRace=next.name;
+  state.nextTrack=next.track||'';
+  state.deadline=next.deadline||'';
+  state.nextRaceType=next.raceType||'regular';
+}
+function removeScheduledRace(i){
+  state.schedule.splice(i,1);
+  syncNextRaceFromSchedule();
+  saveState();toast('Race removed from schedule');renderAdmin();
+}
+function moveScheduledRace(i,dir){
+  const j=i+dir;
+  if(j<0||j>=state.schedule.length)return;
+  [state.schedule[i],state.schedule[j]]=[state.schedule[j],state.schedule[i]];
+  syncNextRaceFromSchedule();
+  saveState();renderAdmin();
+}
+function renderAdminSchedule(){
+  const el=document.getElementById('admin-schedule-list');
+  if(!el)return;
+  if(!state.schedule||!state.schedule.length){
+    el.innerHTML='<p style="font-size:13px;color:var(--text3);text-align:center;padding:4px 0;">No races scheduled yet</p>';
+    return;
+  }
+  el.innerHTML=state.schedule.map((r,i)=>{
+    const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'No deadline';
+    const typeLabel={'regular':'Reg','postseason':'Post','final':'Final'}[r.raceType]||'Reg';
+    const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
+    return`<div style="background:${i===0?'rgba(232,200,74,.06)':'var(--surface2)'};border:1px solid ${i===0?'rgba(232,200,74,.2)':'var(--border)'};border-radius:var(--r-sm);padding:10px 12px;margin-bottom:6px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${i===0?'<span style="font-size:10px;color:var(--accent);font-family:var(--font-display);font-weight:700;letter-spacing:1px;">NEXT</span>':'<span style="font-size:11px;color:var(--text3);">${i+1}.</span>'}
+          <span style="font-size:14px;font-weight:600;">${r.name}</span>
+          <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span>
+        </div>
+        <div style="display:flex;gap:4px;">
+          ${i>0?`<button onclick="moveScheduledRace(${i},-1)" style="font-size:12px;padding:3px 7px;border-radius:5px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">↑</button>`:''}
+          ${i<state.schedule.length-1?`<button onclick="moveScheduledRace(${i},1)" style="font-size:12px;padding:3px 7px;border-radius:5px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">↓</button>`:''}
+          <button onclick="removeScheduledRace(${i})" style="font-size:11px;padding:3px 8px;border-radius:5px;background:none;border:1px solid rgba(232,74,74,.3);color:var(--danger);cursor:pointer;">✕</button>
+        </div>
+      </div>
+      ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
+      <div style="font-size:11px;color:var(--text3);margin-top:2px;">🔒 ${dl}</div>
+    </div>`;
+  }).join('');
+}
+// Keep saveRaceSetup as a no-op for safety
+function saveRaceSetup(){
+  syncNextRaceFromSchedule();
+  saveState();toast('Schedule saved');
 }
 
 /* ── CHANGE PASSWORD ── */
@@ -2003,7 +2088,7 @@ function clearPickForPlayer(playerName){
   saveState();toast(`Cleared ${playerName}'s pick`);renderAdminPicks();
 }
 window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
-window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup;
+window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup; window.addScheduledRace=addScheduledRace; window.removeScheduledRace=removeScheduledRace; window.moveScheduledRace=moveScheduledRace;
 window.changePassword=changePassword; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
 
 /* ── BOOT ── */
