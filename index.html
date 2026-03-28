@@ -288,26 +288,11 @@ select option:disabled{color:var(--text3);}
     <div id="history-add-season" style="display:none">
       <div class="card">
         <div class="card-title">Add Past Season</div>
-        <div class="input-group" style="margin-bottom:10px"><label>Season Year / Label</label><input type="text" id="ps-year" placeholder="e.g. 2023"></div>
-        <div id="ps-races-list"></div>
-        <div style="background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:10px;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:10px;">Add a race to this season</div>
-          <div class="input-group" style="margin-bottom:8px"><label>Race name</label><input type="text" id="ps-race-name" placeholder="e.g. Daytona 500"></div>
-          <div class="input-group" style="margin-bottom:8px"><label>Track</label><input type="text" id="ps-track-name" placeholder="e.g. Daytona International Speedway"></div>
-          <div class="input-group" style="margin-bottom:8px"><label>Race Type</label><select id="ps-race-type"><option value="regular">Regular Season</option><option value="postseason">Post Season</option><option value="final">Final Race</option></select></div>
-          <div id="ps-player-rows"></div>
-          <div style="background:var(--surface);border-radius:var(--r-sm);padding:10px 12px;margin-top:8px;margin-bottom:8px;">
-            <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:8px;">Race Winner</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-              <div><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Winning Driver</label>
-                <select id="ps-winner-driver"><option value="">— select —</option></select>
-              </div>
-              <div><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Winner Points</label>
-                <input type="number" min="0" placeholder="0" id="ps-winner-pts" inputmode="numeric" style="text-align:center;font-size:18px;font-weight:700;">
-              </div>
-            </div>
-          </div>
-          <button class="btn btn-primary" onclick="addPastRace()" style="margin-top:8px">Add Race</button>
+        <div class="input-group" style="margin-bottom:14px"><label>Season Year / Label</label><input type="text" id="ps-year" placeholder="e.g. 2023"></div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:12px;">Enter the final standings for this season. The player with the most points wins the trophy.</div>
+        <div id="ps-standings-rows"></div>
+        <div style="margin-top:8px;margin-bottom:12px;">
+          <button class="btn btn-ghost" onclick="addPsStandingRow()" style="font-size:14px;padding:8px 14px;width:auto;">+ Add Player</button>
         </div>
         <button class="btn btn-primary" onclick="savePastSeason()">Save Season</button>
         <button class="btn btn-ghost" onclick="cancelPastSeason()" style="margin-top:8px">Cancel</button>
@@ -1313,22 +1298,31 @@ function confirmCsvImport(){
 }
 
 /* ── PAST SEASON ENTRY ── */
+let psStandingCount=0;
 function startPastSeason(){
   newSeasonRaces=[];
+  psStandingCount=0;
   document.getElementById('ps-year').value='';
-  document.getElementById('ps-race-name').value='';
-  document.getElementById('ps-track-name').value='';
-  const psrt=document.getElementById('ps-race-type');if(psrt)psrt.value='regular';
-  const pswd=document.getElementById('ps-winner-driver');if(pswd)pswd.value='';
-  const pswp=document.getElementById('ps-winner-pts');if(pswp)pswp.value='';
-  document.getElementById('ps-races-list').innerHTML='';
-  renderPsPlayerRows();
-  setTimeout(()=>populateWinnerDropdown('ps-winner-driver'),0);
+  document.getElementById('ps-standings-rows').innerHTML='';
+  // Pre-populate with current players
+  state.players.forEach(p=>addPsStandingRow(p.name));
   document.getElementById('history-add-season').style.display='';
   document.getElementById('history-add-btn-wrap').style.display='none';
   document.getElementById('history-import-panel').style.display='none';
   document.getElementById('history-alltime-stats').style.display='none';
   document.getElementById('history-seasons-list').style.display='none';
+}
+function addPsStandingRow(name=''){
+  psStandingCount++;
+  const id=psStandingCount;
+  const el=document.createElement('div');
+  el.id='ps-standing-row-'+id;
+  el.style.cssText='display:grid;grid-template-columns:1fr 100px auto;gap:8px;align-items:center;margin-bottom:8px;';
+  el.innerHTML=`
+    <input type="text" placeholder="Player name" value="${name}" id="ps-sname-${id}" style="font-size:14px;padding:10px 12px;" autocapitalize="words">
+    <input type="number" min="0" placeholder="pts" id="ps-spts-${id}" inputmode="numeric" style="font-size:18px;font-weight:700;text-align:center;padding:8px;">
+    <button onclick="document.getElementById('ps-standing-row-${id}').remove()" style="padding:8px 10px;border-radius:var(--r-sm);background:none;border:1px solid rgba(232,74,74,.3);color:var(--danger);font-size:13px;cursor:pointer;white-space:nowrap;">✕</button>`;
+  document.getElementById('ps-standings-rows').appendChild(el);
 }
 function cancelPastSeason(){
   newSeasonRaces=[];
@@ -1357,44 +1351,27 @@ function renderPsPlayerRows(){
   }).join('');
 }
 function addPastRace(){
-  const name=document.getElementById('ps-race-name').value.trim();
-  const track=document.getElementById('ps-track-name').value.trim();
-  if(!name){toast('Enter a race name');return;}
-  const psRaceType=document.getElementById('ps-race-type')?.value||'regular';
-  const psWinnerDriver=document.getElementById('ps-winner-driver')?.value||'';
-  const psWinnerPts=parseInt(document.getElementById('ps-winner-pts')?.value)||0;
-  const entries=state.players.map(p=>{
-    const pid='ps_'+p.name.replace(/\s+/g,'_');
-    const driver=document.getElementById(pid+'-drv')?.value||'—';
-    const pts=parseInt(document.getElementById(pid+'-pts')?.value)||0;
-    const won=document.getElementById(pid+'-win')?.dataset.won==='1';
-    return{player:p.name,driver,won,pts:calcScore(pts,won)};
-  });
-  newSeasonRaces.push({name,track,raceType:psRaceType,entries,winnerDriver:psWinnerDriver,winnerPts:psWinnerPts});
-  const list=document.getElementById('ps-races-list');
-  const chip=document.createElement('div');chip.className='race-chip';
-  chip.innerHTML=`<div class="race-chip-name">${name} <span class="pill pill-success" style="font-size:9px">added</span></div>${track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${track}</div>`:''}`+
-    entries.sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${e.player} — ${e.driver}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('');
-  list.appendChild(chip);
-  document.getElementById('ps-race-name').value='';
-  document.getElementById('ps-track-name').value='';
-  const pswd=document.getElementById('ps-winner-driver');if(pswd)pswd.value='';
-  const pswp=document.getElementById('ps-winner-pts');if(pswp)pswp.value='';
-  state.players.forEach(p=>{
-    const pid='ps_'+p.name.replace(/\s+/g,'_');
-    ['drv','pts'].forEach(f=>{const el=document.getElementById(pid+'-'+f);if(el)el.value='';});
-    const wb=document.getElementById(pid+'-win');
-    if(wb){wb.dataset.won='0';wb.style.background='transparent';wb.style.color='var(--text2)';wb.style.borderColor='var(--border2)';}
-  });
-  toast(`Race added: ${name}`);
+  // Legacy stub — no longer used, kept for safety
 }
 function savePastSeason(){
   const year=document.getElementById('ps-year').value.trim();
   if(!year){toast('Enter a season year or label');return;}
-  if(!newSeasonRaces.length){toast('Add at least one race first');return;}
-  const playerNames=state.players.map(p=>p.name);
-  state.pastSeasons.push({year,players:playerNames,races:newSeasonRaces});
-  saveState();toast(`Season ${year} saved with ${newSeasonRaces.length} races`);
+  // Collect standings rows
+  const rows=[...document.getElementById('ps-standings-rows').children];
+  const standings=[];
+  rows.forEach(row=>{
+    const idNum=row.id.replace('ps-standing-row-','');
+    const name=document.getElementById('ps-sname-'+idNum)?.value.trim();
+    const pts=parseInt(document.getElementById('ps-spts-'+idNum)?.value)||0;
+    if(name) standings.push({name,pts});
+  });
+  if(!standings.length){toast('Add at least one player');return;}
+  const players=standings.map(s=>s.name);
+  // Store as a single "final" race with just the end totals
+  const entries=standings.map(s=>({player:s.name,driver:'—',won:false,pts:s.pts}));
+  const races=[{name:'Season Final',track:'',raceType:'regular',entries,winnerDriver:'',winnerPts:0}];
+  state.pastSeasons.push({year,players,races,isFinalStandings:true});
+  saveState();toast(`Season ${year} saved`);
   cancelPastSeason();
 }
 
@@ -1983,7 +1960,7 @@ window.toggleWin=toggleWin; window.togglePsWin=togglePsWin;
 window.submitResults=submitResults; window.deleteRace=deleteRace;
 window.toggleSeason=toggleSeason; window.showRaceDetail=showRaceDetail;
 window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEditSeason=cancelEditSeason; window.handleCsvImport=handleCsvImport; window.cancelCsvImport=cancelCsvImport; window.confirmCsvImport=confirmCsvImport; window.startCsvImport=startCsvImport; window.cancelCsvImport=cancelCsvImport; window.importCsv=importCsv; window.saveEditSeason=saveEditSeason; window.esAddRace=esAddRace; window.deleteSeasonRace=deleteSeasonRace; window.startPastSeason=startPastSeason;
-window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace;
+window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace; window.addPsStandingRow=addPsStandingRow;
 window.savePastSeason=savePastSeason; window.addDriver=addDriver;
 window.removeDriver=removeDriver; window.toggleDriverEdit=toggleDriverEdit; window.saveDriverEdit=saveDriverEdit; window.addPlayer=addPlayer;
 function setPickForPlayer(playerName, pid){
