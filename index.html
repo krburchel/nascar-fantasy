@@ -250,7 +250,9 @@ select option:disabled{color:var(--text3);}
       <div style="display:flex;gap:8px;margin-bottom:14px;">
         <button id="mode-btn-current" class="mode-btn mode-btn-active" onclick="setResultMode('current')">Current Race</button>
         <button id="mode-btn-backfill" class="mode-btn" onclick="setResultMode('backfill')">Add Past Race</button>
+        <button class="mode-btn" onclick="fetchNascarResults()" style="background:var(--accent);color:#0a0a0a;font-weight:700;margin-left:auto;">🏁 Fetch Results</button>
       </div>
+      <div id="fetch-status" style="display:none;font-size:13px;padding:8px 12px;border-radius:var(--r-sm);margin-bottom:10px;"></div>
       <div class="input-group" style="margin-bottom:10px">
         <label>Race Name</label>
         <input type="text" id="res-race-name" placeholder="e.g. Daytona 500">
@@ -1038,6 +1040,76 @@ function renderResultInputs(){
     </div>`;
   }).join('');
 }
+// Official NASCAR Cup Series points table (positions 1-36, 0 for 37+)
+const NASCAR_PTS = [40, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+function nascarPtsForPos(pos){
+  if(!pos||pos<1) return 0;
+  return NASCAR_PTS[pos-1]||0;
+}
+
+async function fetchNascarResults(){
+  const statusEl=document.getElementById('fetch-status');
+  statusEl.style.display='';
+  statusEl.style.background='var(--surface2)';
+  statusEl.style.color='var(--text2)';
+  statusEl.textContent='Fetching live results from NASCAR...';
+  try{
+    const resp = await fetch('https://cf.nascar.com/cacher/live/live-feed.json');
+    const data = await resp.json();
+    const flagState = data.flag_state;
+    const runName = data.run_name||'';
+    const vehicles = data.vehicles||[];
+    if(!vehicles.length){statusEl.style.color='var(--danger)';statusEl.textContent='No race data found.';return;}
+    // Sort by running_position to get finish order
+    const sorted = [...vehicles].sort((a,b)=>(a.running_position||99)-(b.running_position||99));
+    // Build driver->{pos, pts} map
+    const driverMap = {};
+    sorted.forEach(v=>{
+      const name = v.driver?.full_name||'';
+      if(name) driverMap[name]={pos:v.running_position, pts:nascarPtsForPos(v.running_position), status:v.status};
+    });
+    const winner = sorted[0]?.driver?.full_name||'';
+    const winnerPts = nascarPtsForPos(1); // 40
+    // Pre-fill race name and track from schedule if available
+    const nextRace = state.nextRace||'';
+    const nextTrack = state.nextTrack||'';
+    if(nextRace && !document.getElementById('res-race-name').value)
+      document.getElementById('res-race-name').value=nextRace;
+    if(nextTrack && !document.getElementById('res-track-name').value)
+      document.getElementById('res-track-name').value=nextTrack;
+    // Fill winner
+    const winSelEl=document.getElementById('res-winner-driver');
+    if(winSelEl){
+      [...winSelEl.options].forEach(o=>{if(o.value===winner)o.selected=true;});
+    }
+    const winPtsEl=document.getElementById('res-winner-pts');
+    if(winPtsEl) winPtsEl.value=winnerPts;
+    // Switch to current mode and re-render first so inputs exist
+    setResultMode('current');
+    renderResults();
+    // Fill each player's points
+    let filled=0, missing=[];
+    state.players.forEach(p=>{
+      const pick=state.picks[p.name];
+      if(!pick){missing.push(p.name+' (no pick)');return;}
+      const driverData=driverMap[pick];
+      const pid=p.name.replace(/\s+/g,'_');
+      const ptsEl=document.getElementById('rpts-'+pid);
+      if(ptsEl&&driverData){ptsEl.value=driverData.pts;filled++;}
+      else if(!driverData) missing.push(p.name+' ('+pick+' not found)');
+    });
+    // Status message
+    const raceStatus = flagState===9?'✅ Race finished':'⚠️ Race may still be in progress';
+    statusEl.style.background = flagState===9?'rgba(74,232,138,.1)':'rgba(232,200,74,.1)';
+    statusEl.style.color = flagState===9?'var(--success)':'var(--accent)';
+    statusEl.innerHTML = `${raceStatus} · ${runName} · Winner: ${winner} · ${filled}/${state.players.length} players filled${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+missing.join(', ')+'</span>':''}`;
+
+  } catch(e){
+    statusEl.style.color='var(--danger)';
+    statusEl.textContent='Error fetching results: '+e.message;
+  }
+}
+
 function renderResults(){
   renderResultInputs();
   populateWinnerDropdown('res-winner-driver');
@@ -2271,7 +2343,7 @@ window.doLogin=doLogin; window.doLogout=doLogout;
 window.showTab=showTab; window.savePick=savePick;
 window.setResultMode=setResultMode; window.updatePreview=updatePreview;
 window.toggleWin=toggleWin; window.togglePsWin=togglePsWin;
-window.submitResults=submitResults; window.deleteRace=deleteRace;
+window.submitResults=submitResults; window.fetchNascarResults=fetchNascarResults; window.deleteRace=deleteRace;
 window.toggleSeason=toggleSeason; window.showRaceDetail=showRaceDetail;
 window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEditSeason=cancelEditSeason; window.handleCsvImport=handleCsvImport; window.cancelCsvImport=cancelCsvImport; window.confirmCsvImport=confirmCsvImport; window.startCsvImport=startCsvImport; window.cancelCsvImport=cancelCsvImport; window.importCsv=importCsv; window.saveEditSeason=saveEditSeason; window.esAddRace=esAddRace; window.deleteSeasonRace=deleteSeasonRace; window.startPastSeason=startPastSeason;
 window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace; window.addPsStandingRow=addPsStandingRow;
