@@ -250,7 +250,10 @@ select option:disabled{color:var(--text3);}
       <div style="display:flex;gap:8px;margin-bottom:14px;">
         <button id="mode-btn-current" class="mode-btn mode-btn-active" onclick="setResultMode('current')">Current Race</button>
         <button id="mode-btn-backfill" class="mode-btn" onclick="setResultMode('backfill')">Add Past Race</button>
-        <button class="mode-btn" onclick="fetchNascarResults()" style="background:var(--accent);color:#0a0a0a;font-weight:700;margin-left:auto;">🏁 Fetch Results</button>
+        <div style="display:flex;gap:6px;margin-left:auto;">
+          <button onclick="checkStagePoints()" style="font-size:12px;padding:6px 10px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;white-space:nowrap;">Stage pts?</button>
+          <button class="mode-btn" onclick="fetchNascarResults()" style="background:var(--accent);color:#0a0a0a;font-weight:700;">🏁 Fetch Results</button>
+        </div>
       </div>
       <div id="fetch-status" style="display:none;font-size:13px;padding:8px 12px;border-radius:var(--r-sm);margin-bottom:10px;"></div>
       <div class="input-group" style="margin-bottom:10px">
@@ -1045,6 +1048,38 @@ const NASCAR_PTS = [40, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 
 function nascarPtsForPos(pos){
   if(!pos||pos<1) return 0;
   return NASCAR_PTS[pos-1]||0;
+}
+
+async function checkStagePoints(){
+  const statusEl=document.getElementById('fetch-status');
+  statusEl.style.display='';
+  statusEl.style.background='var(--surface2)';
+  statusEl.style.color='var(--text2)';
+  statusEl.textContent='Checking stage points...';
+  try{
+    const [feedResp, stageResp] = await Promise.all([
+      fetch('https://cf.nascar.com/cacher/live/live-feed.json'),
+      fetch('https://cf.nascar.com/cacher/live/live-stage-points.json')
+    ]);
+    const feed = await feedResp.json();
+    const stage = await stageResp.json();
+    const feedId = feed.race_id;
+    const stageId = stage[0]?.race_id;
+    const match = feedId === stageId;
+    if(match){
+      const totalStagePts = stage.reduce((sum,s)=>(s.results||[]).length+sum,0);
+      statusEl.style.background='rgba(74,232,138,.1)';
+      statusEl.style.color='var(--success)';
+      statusEl.textContent=`✅ Stage points ready for ${feed.run_name} — ${stage.length} stages. Hit Fetch Results now!`;
+    } else {
+      statusEl.style.background='rgba(232,200,74,.08)';
+      statusEl.style.color='var(--accent)';
+      statusEl.textContent=`⏳ Stage points not ready yet (still showing a past race). Check again in a few minutes.`;
+    }
+  } catch(e){
+    statusEl.style.color='var(--danger)';
+    statusEl.textContent='Error checking: '+e.message;
+  }
 }
 
 async function fetchNascarResults(){
@@ -2343,7 +2378,7 @@ window.doLogin=doLogin; window.doLogout=doLogout;
 window.showTab=showTab; window.savePick=savePick;
 window.setResultMode=setResultMode; window.updatePreview=updatePreview;
 window.toggleWin=toggleWin; window.togglePsWin=togglePsWin;
-window.submitResults=submitResults; window.fetchNascarResults=fetchNascarResults; window.deleteRace=deleteRace;
+window.submitResults=submitResults; window.fetchNascarResults=fetchNascarResults; window.checkStagePoints=checkStagePoints; window.deleteRace=deleteRace;
 window.toggleSeason=toggleSeason; window.showRaceDetail=showRaceDetail;
 window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEditSeason=cancelEditSeason; window.handleCsvImport=handleCsvImport; window.cancelCsvImport=cancelCsvImport; window.confirmCsvImport=confirmCsvImport; window.startCsvImport=startCsvImport; window.cancelCsvImport=cancelCsvImport; window.importCsv=importCsv; window.saveEditSeason=saveEditSeason; window.esAddRace=esAddRace; window.deleteSeasonRace=deleteSeasonRace; window.startPastSeason=startPastSeason;
 window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace; window.addPsStandingRow=addPsStandingRow;
