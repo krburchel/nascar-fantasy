@@ -201,6 +201,10 @@ select option:disabled{color:var(--text3);}
       <div class="card-title">Season Standings</div>
       <div id="standings-list"></div>
     </div>
+    <div class="card" id="season-stats-card" style="display:none">
+      <div class="card-title">Season Stats</div>
+      <div id="season-stats-content"></div>
+    </div>
     <div class="card" id="last-race-card" style="display:none">
       <div class="card-title">Last Race</div>
       <div id="last-race-content"></div>
@@ -216,6 +220,13 @@ select option:disabled{color:var(--text3);}
     <div class="card">
       <div class="card-title">My Pick</div>
       <div id="my-pick-section"></div>
+    </div>
+    <div class="card" id="waiting-on-card" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <div class="card-title" style="margin:0">Still Waiting On</div>
+        <span id="waiting-on-count" class="pill pill-danger" style="font-size:11px"></span>
+      </div>
+      <div id="waiting-on-list" style="font-size:14px;color:var(--text2);margin-top:6px;"></div>
     </div>
     <div class="card">
       <div class="card-title">All Picks</div>
@@ -770,6 +781,7 @@ function renderLeaderboard(){
     return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}${role}</div><div class="standing-driver">${pick}${bonus}</div>${subPts}${trophyHtml}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
   }).join(''):'<p class="text-muted text-center">Add players in Admin to get started</p>';
   renderUpcomingSchedule();
+  renderSeasonStats();
   const lrc=document.getElementById('last-race-card');
   if(state.races.length){
     const last=state.races[state.races.length-1];lrc.style.display='';
@@ -782,6 +794,56 @@ function renderLeaderboard(){
       }).join('');
   }else lrc.style.display='none';
 }
+function renderSeasonStats(){
+  const card=document.getElementById('season-stats-card');
+  const content=document.getElementById('season-stats-content');
+  if(!card||!content)return;
+  if(!state.races||!state.races.length){card.style.display='none';return;}
+  card.style.display='';
+
+  // Build per-player stats
+  const stats={};
+  state.players.forEach(p=>{
+    stats[p.name]={name:p.name,total:0,races:0,best:0,bestRace:'',wins:0};
+  });
+
+  state.races.forEach(r=>{
+    (r.entries||[]).forEach(e=>{
+      if(!stats[e.player])return;
+      const s=stats[e.player];
+      s.total+=e.pts;
+      s.races++;
+      if(e.pts>s.best){s.best=e.pts;s.bestRace=r.name;}
+      if(e.won)s.wins++;
+    });
+  });
+
+  const sorted=Object.values(stats).sort((a,b)=>b.total-a.total);
+
+  content.innerHTML=`
+    <div style="display:grid;grid-template-columns:auto 1fr 1fr 1fr;gap:0;width:100%">
+      <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);padding:0 8px 8px 0;"></div>
+      <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);padding:0 6px 8px;text-align:center;">Avg</div>
+      <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);padding:0 6px 8px;text-align:center;">Best</div>
+      <div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);padding:0 0 8px;text-align:center;">Wins</div>
+      ${sorted.map((s,i)=>{
+        const avg=s.races>0?(s.total/s.races).toFixed(1):0;
+        return`
+        <div style="font-size:14px;font-weight:600;padding:7px 8px 7px 0;border-top:1px solid var(--border);display:flex;align-items:center;gap:6px;">
+          <span style="font-size:11px;color:var(--text3);font-family:var(--font-display);width:14px">${i+1}</span>
+          ${s.name}
+        </div>
+        <div style="padding:7px 6px;border-top:1px solid var(--border);text-align:center;font-size:14px;font-weight:700;color:var(--accent)">${avg}</div>
+        <div style="padding:7px 6px;border-top:1px solid var(--border);text-align:center;" title="${s.bestRace}">
+          <span style="font-size:14px;font-weight:700;">${s.best}</span>
+          ${s.bestRace?`<div style="font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70px;margin:0 auto">${s.bestRace.length>14?s.bestRace.substring(0,13)+'…':s.bestRace}</div>`:''}
+        </div>
+        <div style="padding:7px 0;border-top:1px solid var(--border);text-align:center;font-size:14px;font-weight:700;">${s.wins>0?'🏆 '+s.wins:'—'}</div>`;
+      }).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:10px;text-align:right">${state.races.length} race${state.races.length!==1?'s':''} this season</div>`;
+}
+
 function renderUpcomingSchedule(){
   const card=document.getElementById('upcoming-schedule-card');
   const list=document.getElementById('upcoming-schedule-list');
@@ -898,6 +960,20 @@ function renderPicks(){
       <button class="btn btn-primary" onclick="savePick()">Lock In Pick</button>
       ${myPick?`<div class="text-muted text-center" style="font-size:13px">Current: <strong>${myPick}</strong></div>`:''}
     </div>`;
+  }
+  // ── Waiting on card ──
+  const waitingCard=document.getElementById('waiting-on-card');
+  const waitingList=document.getElementById('waiting-on-list');
+  const waitingCount=document.getElementById('waiting-on-count');
+  if(waitingCard&&waitingList){
+    const missing=state.players.filter(p=>!state.picks[p.name]);
+    if(!locked&&missing.length>0){
+      waitingCard.style.display='';
+      waitingCount.textContent=missing.length;
+      waitingList.innerHTML=missing.map(p=>`<span style="display:inline-block;background:var(--surface2);border-radius:20px;padding:4px 12px;margin:3px 4px 3px 0;font-weight:600;">${p.name}</span>`).join('');
+    } else {
+      waitingCard.style.display='none';
+    }
   }
   document.getElementById('all-picks-list').innerHTML=state.players.map(p=>{
     const pick=state.picks[p.name];
