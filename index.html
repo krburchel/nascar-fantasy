@@ -247,57 +247,8 @@ select option:disabled{color:var(--text3);}
   <!-- RESULTS (commissioner) -->
   <div id="tab-results" class="content" style="display:none">
     <div class="card">
-      <div style="display:flex;gap:8px;margin-bottom:14px;">
-        <button id="mode-btn-current" class="mode-btn mode-btn-active" onclick="setResultMode('current')">Current Race</button>
-        <button id="mode-btn-backfill" class="mode-btn" onclick="setResultMode('backfill')">Add Past Race</button>
-        <div style="display:flex;gap:6px;margin-left:auto;">
-          <button onclick="checkStagePoints()" style="font-size:12px;padding:6px 10px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;white-space:nowrap;">Stage pts?</button>
-          <button class="mode-btn" onclick="fetchNascarResults()" style="background:var(--accent);color:#0a0a0a;font-weight:700;">🏁 Fetch Results</button>
-        </div>
-      </div>
-      <div id="fetch-status" style="display:none;font-size:13px;padding:8px 12px;border-radius:var(--r-sm);margin-bottom:10px;"></div>
-      <div class="input-group" style="margin-bottom:10px">
-        <label>Race Name</label>
-        <input type="text" id="res-race-name" placeholder="e.g. Daytona 500">
-      </div>
-      <div class="input-group" style="margin-bottom:14px">
-        <label>Track</label>
-        <input type="text" id="res-track-name" placeholder="e.g. Daytona International Speedway">
-      </div>
-      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px;">
-        <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:10px;">Race Winner</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Winning Driver</label>
-            <select id="res-winner-driver">
-              <option value="">— select —</option>
-            </select>
-          </div>
-          <div><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Winner Points</label>
-            <input type="number" min="0" placeholder="0" id="res-winner-pts" inputmode="numeric" style="text-align:center;font-size:18px;font-weight:700;">
-          </div>
-        </div>
-      </div>
-      <div class="input-group" style="margin-bottom:14px">
-        <label>Race Type</label>
-        <select id="res-race-type">
-          <option value="regular">Regular Season</option>
-          <option value="postseason">Post Season</option>
-          <option value="final">Final Race</option>
-        </select>
-      </div>
-      <div id="backfill-note" style="display:none;font-size:12px;color:var(--info);background:rgba(74,158,232,.08);border-radius:var(--r-sm);padding:8px 12px;margin-bottom:12px;">
-        Past race mode — select each player's driver manually. Used drivers count toward the season lock.
-      </div>
-      <div id="results-player-inputs"></div>
-      <button class="btn btn-primary" onclick="submitResults()" style="margin-top:6px">Save &amp; Post Results</button>
-    </div>
-    <div class="card">
       <div class="card-title">This Season's Races</div>
       <div id="history-list"></div>
-    </div>
-    <div class="card" id="close-season-card">
-      <div class="card-title">Season Status</div>
-      <div id="season-status-body"></div>
     </div>
   </div>
 
@@ -384,6 +335,51 @@ select option:disabled{color:var(--text3);}
   <!-- ADMIN (commissioner) -->
   <div id="tab-admin" class="content" style="display:none">
     <div class="card">
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button id="mode-btn-current" class="mode-btn mode-btn-active" onclick="setResultMode('current')">Current Race</button>
+        <button id="mode-btn-backfill" class="mode-btn" onclick="setResultMode('backfill')">Add Past Race</button>
+        <div style="display:flex;gap:6px;margin-left:auto;">
+          <button onclick="checkStagePoints()" style="font-size:12px;padding:6px 10px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;white-space:nowrap;">Stage pts?</button>
+          <button class="mode-btn" onclick="fetchNascarResults()" style="background:var(--accent);color:#0a0a0a;font-weight:700;">🏁 Fetch Results</button>
+        </div>
+      </div>
+      <div id="fetch-status" style="display:none;font-size:13px;padding:8px 12px;border-radius:var(--r-sm);margin-bottom:10px;"></div>
+      <div class="input-group" style="margin-bottom:10px">
+        <label>Race Name</label>
+        <input type="text" id="res-race-name" placeholder="e.g. Daytona 500">
+      </div>
+      <div class="input-group" style="margin-bottom:14px">
+        <label>Track</label>
+        <input type="text" id="res-track-name" placeholder="e.g. Daytona International Speedway">
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px;">
+        <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:10px;">Race Winner</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Winning Driver</label>
+            <select id="res-winner-driver">
+              <option value="">— select —</option>
+            </select>
+          </div>
+          <div><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Winner Points</label>
+            <input type="number" min="0" placeholder="0" id="res-winner-pts" inputmode="numeric" style="text-align:center;font-size:18px;font-weight:700;">
+          </div>
+        </div>
+      </div>
+      <div class="input-group" style="margin-bottom:14px">
+        <label>Race Type</label>
+        <select id="res-race-type">
+          <option value="regular">Regular Season</option>
+          <option value="postseason">Post Season</option>
+          <option value="final">Final Race</option>
+        </select>
+      </div>
+      <div id="backfill-note" style="display:none;font-size:12px;color:var(--info);background:rgba(74,158,232,.08);border-radius:var(--r-sm);padding:8px 12px;margin-bottom:12px;">
+        Past race mode — select each player's driver manually. Used drivers count toward the season lock.
+      </div>
+      <div id="results-player-inputs"></div>
+      <button class="btn btn-primary" onclick="submitResults()" style="margin-top:6px">Save &amp; Post Results</button>
+    </div>
+    <div class="card">
       <div class="card-title">Drivers</div>
       <div id="driver-mgmt-list" style="max-height:220px;overflow-y:auto;margin-bottom:10px;"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
@@ -438,6 +434,10 @@ select option:disabled{color:var(--text3);}
       <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Override or set a pick on behalf of any player for the current race.</div>
       <div id="admin-picks-list"></div>
     </div>
+    <div class="card" id="close-season-card">
+      <div class="card-title">Season Status</div>
+      <div id="season-status-body"></div>
+    </div>
   </div>
 
   <div class="bottom-nav">
@@ -453,7 +453,7 @@ select option:disabled{color:var(--text3);}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><path d="M3.05 11a9 9 0 1 1 .5 4"/><polyline points="3 16 3 11 8 11"/></svg>
       History
     </button>
-    <button class="nav-item" id="nav-results" onclick="showTab('results')" data-tab="results" style="display:none">
+    <button class="nav-item" id="nav-results" onclick="showTab('results')" data-tab="results">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       Results
     </button>
@@ -641,7 +641,7 @@ function enterApp(){
   document.getElementById('main-screen').style.display='';
   requestNotifyPermission();
   const isComm=currentUser.role==='commissioner'||currentUser.role==='admin';
-  document.getElementById('nav-results').style.display=isComm?'':'none';
+  document.getElementById('nav-results').style.display='';
   document.getElementById('nav-admin').style.display=isComm?'':'none';
   document.getElementById('history-add-btn').style.display=isComm?'':'none';
   document.getElementById('history-import-btn').style.display=isComm?'':'none';
@@ -1121,7 +1121,7 @@ async function fetchNascarResults(){
     if(winPtsEl) winPtsEl.value=winnerPts;
     // Switch to current mode and re-render first so inputs exist
     setResultMode('current');
-    renderResults();
+    renderResultsForm();
     // Fill each player's points
     let filled=0, missing=[];
     state.players.forEach(p=>{
@@ -1146,13 +1146,8 @@ async function fetchNascarResults(){
 }
 
 function renderResults(){
-  renderResultInputs();
-  populateWinnerDropdown('res-winner-driver');
-  renderSeasonStatus();
-  // Pre-select race type based on what admin set for next race
-  const rtSel=document.getElementById('res-race-type');
-  if(rtSel&&state.nextRaceType)rtSel.value=state.nextRaceType;
   const hl=document.getElementById('history-list');
+  if(!hl)return;
   hl.innerHTML=state.races.length?[...state.races].reverse().map((r,i)=>{
     const idx=state.races.length-1-i;
     const typeLabel={'postseason':'Post Season','final':'Final Race','regular':''}[r.raceType||'regular']||'';
@@ -1168,6 +1163,13 @@ function renderResults(){
       ${[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${e.player} — ${e.driver}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('')}
     </div>`;
   }).join(''):'<p class="text-muted text-center">No races yet</p>';
+}
+function renderResultsForm(){
+  renderResultInputs();
+  populateWinnerDropdown('res-winner-driver');
+  // Pre-select race type based on what admin set for next race
+  const rtSel=document.getElementById('res-race-type');
+  if(rtSel&&state.nextRaceType)rtSel.value=state.nextRaceType;
 }
 function updatePreview(pid){
   const pts=parseInt(document.getElementById('rpts-'+pid)?.value)||0;
@@ -1215,6 +1217,7 @@ function submitResults(){
   const rt=document.getElementById('res-race-type');if(rt)rt.value='regular';
   const wd=document.getElementById('res-winner-driver');if(wd)wd.value='';
   const wp=document.getElementById('res-winner-pts');if(wp)wp.value='';
+  renderResultsForm();
   renderResults();
 }
 function deleteRace(idx){
@@ -2110,6 +2113,7 @@ function unretireDriver(name){
 
 /* ── ADMIN ── */
 function renderAdmin(){
+  renderResultsForm();
   renderDriverList();
   renderAdminSchedule();
   document.getElementById('player-mgmt-list').innerHTML=state.players.map(p=>{
@@ -2125,6 +2129,7 @@ function renderAdmin(){
   const tzLabel=document.getElementById('admin-tz-label');
   if(tzLabel)tzLabel.textContent='('+Intl.DateTimeFormat().resolvedOptions().timeZone+')';
   renderAdminPicks();
+  renderSeasonStatus();
 }
 function renderAdminPicks(){
   const el=document.getElementById('admin-picks-list');
