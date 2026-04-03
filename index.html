@@ -1153,14 +1153,51 @@ function renderResults(){
     const typeLabel={'postseason':'Post Season','final':'Final Race','regular':''}[r.raceType||'regular']||'';
     const typeColor={'postseason':'pill-gold','final':'pill-danger','regular':''}[r.raceType||'regular']||'';
     const tag=(r.backfill?' <span class="pill pill-info" style="font-size:9px">past</span>':'')+(typeLabel?` <span class="pill ${typeColor}" style="font-size:9px">${typeLabel}</span>`:'');
-    return`<div class="race-chip">
+    const entryRows=[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>{
+      const pid='edit_'+idx+'_'+e.player.replace(/\s+/g,'_');
+      const rawPts=e.won?e.pts-10:e.pts;
+      return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <div style="flex:1;font-size:13px;font-weight:600">${e.player}<div style="font-size:11px;color:var(--text2);font-weight:400">${e.driver}</div></div>
+        <input type="number" min="0" id="${pid}-pts" value="${rawPts}" inputmode="numeric" style="width:64px;font-size:16px;font-weight:700;text-align:center;padding:5px 6px;">
+        <button id="${pid}-win" data-won="${e.won?'1':'0'}" onclick="toggleEditWin('${pid}')" style="padding:6px 10px;border-radius:var(--r-sm);border:1px solid ${e.won?'var(--accent)':'var(--border2)'};background:${e.won?'var(--accent)':'transparent'};color:${e.won?'#0a0a0a':'var(--text2)'};font-family:var(--font-display);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+10 WIN</button>
+      </div>`;
+    }).join('');
+    const isComm=currentUser.role==='commissioner'||currentUser.role==='admin';
+    return`<div class="race-chip" id="race-chip-${idx}">
       <div class="race-chip-name" style="display:flex;align-items:center;justify-content:space-between">
         <span>${r.name}${tag}</span>
-        <button onclick="deleteRace(${idx})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 6px;">Delete</button>
+        ${isComm?`<div style="display:flex;gap:6px;">
+          <button onclick="toggleRaceEdit(${idx})" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:2px 8px;">Edit</button>
+          <button onclick="deleteRace(${idx})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 6px;">Delete</button>
+        </div>`:''}
       </div>
       ${r.track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${r.track}</div>`:''}
       ${r.winnerDriver?`<div style="font-size:12px;background:rgba(232,200,74,.1);color:var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:6px;display:inline-block;">🏆 ${r.winnerDriver}${r.winnerPts?' · '+r.winnerPts+' pts':''}</div>`:''}
-      ${[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${e.player} — ${e.driver}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('')}
+      <div id="race-view-${idx}">${[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${e.player} — ${e.driver}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('')}</div>
+      ${isComm?`<div id="race-edit-${idx}" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Name</label>
+            <input type="text" id="redit-name-${idx}" value="${r.name.replace(/"/g,'&quot;')}" style="font-size:13px;padding:7px 9px;width:100%"></div>
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Track</label>
+            <input type="text" id="redit-track-${idx}" value="${(r.track||'').replace(/"/g,'&quot;')}" style="font-size:13px;padding:7px 9px;width:100%"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Type</label>
+            <select id="redit-type-${idx}" style="font-size:13px;padding:7px 9px;width:100%">
+              <option value="regular" ${(r.raceType||'regular')==='regular'?'selected':''}>Regular Season</option>
+              <option value="postseason" ${r.raceType==='postseason'?'selected':''}>Post Season</option>
+              <option value="final" ${r.raceType==='final'?'selected':''}>Final Race</option>
+            </select></div>
+          <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Winning Driver</label>
+            <input type="text" id="redit-winner-${idx}" value="${(r.winnerDriver||'').replace(/"/g,'&quot;')}" placeholder="Driver name" style="font-size:13px;padding:7px 9px;width:100%"></div>
+        </div>
+        <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:8px;">Player Results</div>
+        ${entryRows}
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button onclick="saveRaceEdit(${idx})" style="flex:1;padding:9px;border-radius:var(--r-sm);background:var(--accent);color:#0a0a0a;font-family:var(--font-display);font-size:15px;font-weight:700;border:none;cursor:pointer;">Save</button>
+          <button onclick="toggleRaceEdit(${idx})" style="padding:9px 14px;border-radius:var(--r-sm);background:none;border:1px solid var(--border2);color:var(--text2);font-size:13px;cursor:pointer;">Cancel</button>
+        </div>
+      </div>`:''}
     </div>`;
   }).join(''):'<p class="text-muted text-center">No races yet</p>';
 }
@@ -1223,6 +1260,39 @@ function submitResults(){
 function deleteRace(idx){
   if(!confirm('Delete this race?'))return;
   state.races.splice(idx,1);saveState();toast('Race deleted');renderResults();
+}
+function toggleRaceEdit(idx){
+  const view=document.getElementById('race-view-'+idx);
+  const edit=document.getElementById('race-edit-'+idx);
+  if(!edit)return;
+  const opening=edit.style.display==='none';
+  edit.style.display=opening?'':'none';
+  if(view)view.style.display=opening?'none':'';
+}
+function toggleEditWin(pid){
+  const btn=document.getElementById(pid+'-win');
+  const isWon=btn.dataset.won==='1';
+  btn.dataset.won=isWon?'0':'1';
+  btn.style.background=isWon?'transparent':'var(--accent)';
+  btn.style.color=isWon?'var(--text2)':'#0a0a0a';
+  btn.style.borderColor=isWon?'var(--border2)':'var(--accent)';
+}
+function saveRaceEdit(idx){
+  const r=state.races[idx];
+  if(!r){toast('Race not found');return;}
+  const name=document.getElementById('redit-name-'+idx)?.value.trim();
+  if(!name){toast('Race name required');return;}
+  r.name=name;
+  r.track=document.getElementById('redit-track-'+idx)?.value.trim()||'';
+  r.raceType=document.getElementById('redit-type-'+idx)?.value||'regular';
+  r.winnerDriver=document.getElementById('redit-winner-'+idx)?.value.trim()||'';
+  r.entries=r.entries.map(e=>{
+    const pid='edit_'+idx+'_'+e.player.replace(/\s+/g,'_');
+    const rawPts=parseInt(document.getElementById(pid+'-pts')?.value)||0;
+    const won=document.getElementById(pid+'-win')?.dataset.won==='1';
+    return{...e,pts:rawPts+(won?10:0),won};
+  });
+  saveState();toast('Race updated');renderResults();
 }
 
 /* ── SEASON STATUS ── */
@@ -2405,6 +2475,7 @@ function clearPickForPlayer(playerName){
 window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
 window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup; window.addScheduledRace=addScheduledRace; window.removeScheduledRace=removeScheduledRace; window.moveScheduledRace=moveScheduledRace; window.toggleScheduleEdit=toggleScheduleEdit; window.saveScheduleEdit=saveScheduleEdit;
 window.changePassword=changePassword; window.requestNotifyPermission=requestNotifyPermission; window.tvNetworkBadge=tvNetworkBadge; window.populateWinnerDropdown=populateWinnerDropdown; window.confirmCloseSeason=confirmCloseSeason; window.openNewSeason=openNewSeason; window.startCloseRegularSeason=startCloseRegularSeason; window.savePlayoffBonuses=savePlayoffBonuses;
+window.toggleRaceEdit=toggleRaceEdit; window.toggleEditWin=toggleEditWin; window.saveRaceEdit=saveRaceEdit;
 
 /* ── BOOT ── */
 document.getElementById('login-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('login-pass').focus();});
