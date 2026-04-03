@@ -861,12 +861,12 @@ function renderUpcomingSchedule(){
     const typeLabel={'regular':'Regular','postseason':'Post Season','final':'Final Race'}[r.raceType]||'Regular';
     const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
     const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
-    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}">
-      <div>
+    return`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}">
+      <div style="min-width:0">
         <div style="font-size:14px;font-weight:600;">${r.name} <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span></div>
         ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
-        ${dl?`<div style="font-size:11px;color:var(--text3);">🔒 ${dl}</div>`:''}
       </div>
+      ${dl?`<div style="text-align:right;flex-shrink:0"><div style="font-size:10px;color:var(--text3);white-space:nowrap;">🔒 ${dl}</div></div>`:''}
     </div>`;
   }).join('');
 }
