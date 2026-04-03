@@ -1089,22 +1089,52 @@ async function fetchNascarResults(){
   statusEl.style.color='var(--text2)';
   statusEl.textContent='Fetching live results from NASCAR...';
   try{
-    const resp = await fetch('https://cf.nascar.com/cacher/live/live-feed.json');
-    const data = await resp.json();
+    const [feedResp, stageResp] = await Promise.all([
+      fetch('https://cf.nascar.com/cacher/live/live-feed.json'),
+      fetch('https://cf.nascar.com/cacher/live/live-stage-points.json')
+    ]);
+    const data = await feedResp.json();
+    const stageData = await stageResp.json();
     const flagState = data.flag_state;
     const runName = data.run_name||'';
     const vehicles = data.vehicles||[];
     if(!vehicles.length){statusEl.style.color='var(--danger)';statusEl.textContent='No race data found.';return;}
+
+    // Build stage bonus map: driver full_name -> total stage bonus pts
+    const stageBonusMap={};
+    const feedRaceId=data.race_id;
+    const stageRaceId=stageData[0]?.race_id;
+    const stageMatch=feedRaceId&&stageRaceId&&feedRaceId===stageRaceId;
+    let totalStagesFound=0, totalStageBonusPts=0;
+    if(stageMatch){
+      stageData.forEach(stage=>{
+        (stage.results||[]).forEach(r=>{
+          const name=r.driver?.full_name||r.full_name||'';
+          const bonus=r.stage_points||r.points||0;
+          if(name&&bonus){
+            stageBonusMap[name]=(stageBonusMap[name]||0)+bonus;
+            totalStageBonusPts+=bonus;
+          }
+        });
+        totalStagesFound++;
+      });
+    }
+
     // Sort by running_position to get finish order
     const sorted = [...vehicles].sort((a,b)=>(a.running_position||99)-(b.running_position||99));
-    // Build driver->{pos, pts} map
+    // Build driver -> {pts, stageBonus, total} map
     const driverMap = {};
     sorted.forEach(v=>{
       const name = v.driver?.full_name||'';
-      if(name) driverMap[name]={pos:v.running_position, pts:nascarPtsForPos(v.running_position), status:v.status};
+      if(name){
+        const finishPts=nascarPtsForPos(v.running_position);
+        const stageBonus=stageBonusMap[name]||0;
+        driverMap[name]={pos:v.running_position, pts:finishPts+stageBonus, finishPts, stageBonus, status:v.status};
+      }
     });
+
     const winner = sorted[0]?.driver?.full_name||'';
-    const winnerPts = nascarPtsForPos(1); // 40
+    const winnerPts = nascarPtsForPos(1);
     // Pre-fill race name and track from schedule if available
     const nextRace = state.nextRace||'';
     const nextTrack = state.nextTrack||'';
@@ -1130,14 +1160,22 @@ async function fetchNascarResults(){
       const driverData=driverMap[pick];
       const pid=p.name.replace(/\s+/g,'_');
       const ptsEl=document.getElementById('rpts-'+pid);
-      if(ptsEl&&driverData){ptsEl.value=driverData.pts;filled++;}
+      if(ptsEl&&driverData){
+        ptsEl.value=driverData.pts;
+        // Show breakdown as tooltip if stage bonus applied
+        if(driverData.stageBonus) ptsEl.title=`${driverData.finishPts} finish + ${driverData.stageBonus} stage bonus`;
+        filled++;
+      }
       else if(!driverData) missing.push(p.name+' ('+pick+' not found)');
     });
     // Status message
     const raceStatus = flagState===9?'✅ Race finished':'⚠️ Race may still be in progress';
+    const stageStatus = stageMatch
+      ? (totalStagesFound>0?` · 🏁 ${totalStagesFound} stage${totalStagesFound!==1?'s':''} · ${totalStageBonusPts} bonus pts applied`:'')
+      : ' · ⚠️ Stage points not matched (may still be loading)';
     statusEl.style.background = flagState===9?'rgba(74,232,138,.1)':'rgba(232,200,74,.1)';
     statusEl.style.color = flagState===9?'var(--success)':'var(--accent)';
-    statusEl.innerHTML = `${raceStatus} · ${runName} · Winner: ${winner} · ${filled}/${state.players.length} players filled${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+missing.join(', ')+'</span>':''}`;
+    statusEl.innerHTML = `${raceStatus} · ${runName} · Winner: ${winner} · ${filled}/${state.players.length} players filled${stageStatus}${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+missing.join(', ')+'</span>':''}`;
 
   } catch(e){
     statusEl.style.color='var(--danger)';
