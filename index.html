@@ -383,7 +383,7 @@ select option:disabled{color:var(--text3);}
       <div class="card-title">Drivers</div>
       <div id="driver-mgmt-list" style="max-height:220px;overflow-y:auto;margin-bottom:10px;"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-        <div><label style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver Name</label><input type="text" id="new-driver-name" placeholder="Full name" autocapitalize="words"></div>
+        <div><label style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver Name</label><input type="text" id="new-driver-name" placeholder="Full name" autocapitalize="words" maxlength="50"></div>
         <div><label style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Car #</label><input type="text" id="new-driver-number" placeholder="e.g. 48" inputmode="numeric"></div>
       </div>
       <button class="add-btn-sm" onclick="addDriver()" style="width:100%">Add Driver</button>
@@ -393,7 +393,7 @@ select option:disabled{color:var(--text3);}
       <div id="player-mgmt-list"></div>
       <div class="divider" style="margin:12px 0"></div>
       <div class="add-player-row">
-        <div><label>Name</label><input type="text" id="new-pname" placeholder="Player name" autocapitalize="words"></div>
+        <div><label>Name</label><input type="text" id="new-pname" placeholder="Player name" autocapitalize="words" maxlength="30"></div>
         <div><label>Password</label><input type="password" id="new-ppass" placeholder="••••••"></div>
         <button class="add-btn-sm" onclick="addPlayer()">Add</button>
       </div>
@@ -492,6 +492,34 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const STATE_REF = db.collection('league').doc('state');
+
+/* ── SECURITY UTILITIES ── */
+// HTML-escape to prevent XSS when inserting user data into innerHTML
+function esc(str){
+  if(str==null) return '';
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+// JS-escape for use in inline onclick handler strings
+function jsEsc(str){
+  if(str==null) return '';
+  return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"');
+}
+
+// SHA-256 password hashing via Web Crypto API
+async function hashPassword(pw){
+  const enc = new TextEncoder().encode(pw);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+// Check if a stored password is already hashed (64 hex chars = SHA-256)
+function isHashed(pw){ return typeof pw==='string' && /^[0-9a-f]{64}$/.test(pw); }
 
 const DEFAULT_DRIVERS=[
   {name:"Chase Elliott",number:"9"},
@@ -616,12 +644,22 @@ function toast(msg){
 }
 
 /* ── AUTH ── */
-function doLogin(){
+async function doLogin(){
   if(!state){toast('Still connecting…');return;}
   const u=document.getElementById('login-user').value.trim();
   const p=document.getElementById('login-pass').value;
-  const player=state.players.find(pl=>pl.name.toLowerCase()===u.toLowerCase()&&pl.password===p);
+  const player=state.players.find(pl=>pl.name.toLowerCase()===u.toLowerCase());
   if(!player){document.getElementById('login-error').textContent='Invalid username or password';return;}
+  const hashed=await hashPassword(p);
+  if(isHashed(player.password)){
+    // Already migrated — compare hashes
+    if(hashed!==player.password){document.getElementById('login-error').textContent='Invalid username or password';return;}
+  } else {
+    // Legacy plaintext — compare, then migrate to hashed
+    if(p!==player.password){document.getElementById('login-error').textContent='Invalid username or password';return;}
+    player.password=hashed;
+    saveState();
+  }
   currentUser=player;
   document.getElementById('login-error').textContent='';
   enterApp();
@@ -777,13 +815,13 @@ function renderLeaderboard(){
     const pick=pickName==='—'?'—':(pickObj&&dNum(pickObj)?`#${dNum(pickObj)} ${pickName}`:pickName);
     const role=p.role==='commissioner'?' <span class="pill pill-info">Comm</span>':'';
     const champs=champMap[p.name]||[];
-    const trophies=champs.map(y=>`<span class="champ-badge">🏆 ${y}</span>`).join('');
+    const trophies=champs.map(y=>`<span class="champ-badge">🏆 ${esc(y)}</span>`).join('');
     const bonusAmt=inPlayoffs?(state.playoffBonuses[p.name]||0):0;
     const racePts=inPlayoffs?(pts[p.name]||0)-bonusAmt:0;
     const bonus=inPlayoffs&&bonusAmt?`<span style="font-size:11px;color:var(--text2)"> (+${bonusAmt} bonus)</span>`:'';
     const subPts=inPlayoffs?`<div style="font-size:11px;color:var(--text2)">${racePts} race pts${bonusAmt?' + '+bonusAmt+' bonus':''}</div>`:'';
     const trophyHtml=trophies?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophies}</div>`:'';
-    return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}${role}</div><div class="standing-driver">${pick}${bonus}</div>${subPts}${trophyHtml}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
+    return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${esc(p.name)}${role}</div><div class="standing-driver">${esc(pick)}${bonus}</div>${subPts}${trophyHtml}</div><div class="standing-pts">${pts[p.name]||0}</div></div>`;
   }).join(''):'<p class="text-muted text-center">Add players in Admin to get started</p>';
   renderUpcomingSchedule();
   renderSeasonStats();
@@ -791,11 +829,11 @@ function renderLeaderboard(){
   if(state.races.length){
     const last=state.races[state.races.length-1];lrc.style.display='';
     document.getElementById('last-race-content').innerHTML=
-      `<div style="font-size:14px;font-weight:600;margin-bottom:2px">${last.name}</div>${last.track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${last.track}</div>`:''  }${last.winnerDriver?`<div style="font-size:12px;background:rgba(232,200,74,.1);color:var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:8px;display:inline-block;">🏆 ${last.winnerDriver}${last.winnerPts?' · '+last.winnerPts+' pts':''}</div>`:''}`+
+      `<div style="font-size:14px;font-weight:600;margin-bottom:2px">${esc(last.name)}</div>${last.track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${esc(last.track)}</div>`:''  }${last.winnerDriver?`<div style="font-size:12px;background:rgba(232,200,74,.1);color:var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:8px;display:inline-block;">🏆 ${esc(last.winnerDriver)}${last.winnerPts?' · '+last.winnerPts+' pts':''}</div>`:''}`+
       [...last.entries].sort((a,b)=>b.pts-a.pts).map(e=>{
         const d=DRIVERS.find(x=>dName(x)===e.driver);
         const dDisp=d&&dNum(d)?`#${dNum(d)} ${e.driver}`:e.driver;
-        return`<div class="standing-row" style="padding:8px 0"><div style="flex:1"><div style="font-size:14px;font-weight:600">${e.player}</div><div style="font-size:12px;color:var(--text2)">${dDisp}${e.won?' 🏆':''}</div></div><div class="standing-pts" style="font-size:20px">${e.pts}</div></div>`;
+        return`<div class="standing-row" style="padding:8px 0"><div style="flex:1"><div style="font-size:14px;font-weight:600">${esc(e.player)}</div><div style="font-size:12px;color:var(--text2)">${esc(dDisp)}${e.won?' 🏆':''}</div></div><div class="standing-pts" style="font-size:20px">${e.pts}</div></div>`;
       }).join('');
   }else lrc.style.display='none';
 }
@@ -836,12 +874,12 @@ function renderSeasonStats(){
         return`
         <div style="font-size:14px;font-weight:600;padding:7px 8px 7px 0;border-top:1px solid var(--border);display:flex;align-items:center;gap:6px;">
           <span style="font-size:11px;color:var(--text3);font-family:var(--font-display);width:14px">${i+1}</span>
-          ${s.name}
+          ${esc(s.name)}
         </div>
         <div style="padding:7px 6px;border-top:1px solid var(--border);text-align:center;font-size:14px;font-weight:700;color:var(--accent)">${avg}</div>
         <div style="padding:7px 6px;border-top:1px solid var(--border);text-align:center;" title="${s.bestRace}">
           <span style="font-size:14px;font-weight:700;">${s.best}</span>
-          ${s.bestRace?`<div style="font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70px;margin:0 auto">${s.bestRace.length>14?s.bestRace.substring(0,13)+'…':s.bestRace}</div>`:''}
+          ${s.bestRace?`<div style="font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70px;margin:0 auto">${s.bestRace.length>14?esc(s.bestRace).substring(0,13)+'…':esc(s.bestRace)}</div>`:''}
         </div>
         <div style="padding:7px 0;border-top:1px solid var(--border);text-align:center;font-size:14px;font-weight:700;">${s.wins>0?'🏆 '+s.wins:'—'}</div>`;
       }).join('')}
@@ -863,8 +901,8 @@ function renderUpcomingSchedule(){
     const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
     return`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}">
       <div style="min-width:0">
-        <div style="font-size:14px;font-weight:600;">${r.name} <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span></div>
-        ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
+        <div style="font-size:14px;font-weight:600;">${esc(r.name)} <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span></div>
+        ${r.track?`<div style="font-size:12px;color:var(--text2);">${esc(r.track)}</div>`:''}
       </div>
       ${dl?`<div style="text-align:right;flex-shrink:0"><div style="font-size:10px;color:var(--text3);white-space:nowrap;">🔒 ${dl}</div></div>`:''}
     </div>`;
@@ -879,7 +917,7 @@ function renderCountdown(){
   const isLocked=dl&&new Date()>=dl;
   const noPick=!state.picks[currentUser.name];
   const cdNetwork=state.schedule&&state.schedule[0]&&state.schedule[0].network?state.schedule[0].network:'';
-  let h=`<div class="countdown-label">${isLocked?'Picks locked for':'Picks close in'}</div><div class="countdown-race" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${race}${cdNetwork?tvNetworkBadge(cdNetwork):''}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}`;
+  let h=`<div class="countdown-label">${isLocked?'Picks locked for':'Picks close in'}</div><div class="countdown-race" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${esc(race)}${cdNetwork?tvNetworkBadge(cdNetwork):''}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${esc(track)}</div>`:''}`;
   if(!dl){
     h=`<div class="countdown-label">Picks window</div><div class="countdown-race" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${race}${cdNetwork?tvNetworkBadge(cdNetwork):''}</div>${track?`<div style="font-size:13px;color:var(--text2);margin-bottom:10px">${track}</div>`:''}<div class="cd-open">Open — no deadline set</div>`;
   } else if(isLocked){
@@ -949,7 +987,7 @@ function renderPicks(){
   const used=isFinal?new Set():usedDrivers(currentUser.name, raceMode);
   const section=document.getElementById('my-pick-section');
   if(locked){
-    section.innerHTML=`<div style="font-family:var(--font-display);font-size:28px;font-weight:700;color:var(--accent)">${myPick||'No pick'}</div><div class="pick-race">${race}</div><div class="pill pill-danger" style="margin-top:8px;display:inline-block">Picks locked</div>`;
+    section.innerHTML=`<div style="font-family:var(--font-display);font-size:28px;font-weight:700;color:var(--accent)">${esc(myPick||'No pick')}</div><div class="pick-race">${esc(race)}</div><div class="pill pill-danger" style="margin-top:8px;display:inline-block">Picks locked</div>`;
   }else{
     const availCount=DRIVERS.filter(d=>!used.has(dName(d))).length;
     const modeNote=isFinal
@@ -963,7 +1001,7 @@ function renderPicks(){
         ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const isUsed=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${myPick===val?'selected':''} ${isUsed?'disabled':''}>${isUsed?'✕ ':''}${lbl}${isUsed?' (used)':''}</option>`;}).join('')}
       </select>
       <button class="btn btn-primary" onclick="savePick()">Lock In Pick</button>
-      ${myPick?`<div class="text-muted text-center" style="font-size:13px">Current: <strong>${myPick}</strong></div>`:''}
+      ${myPick?`<div class="text-muted text-center" style="font-size:13px">Current: <strong>${esc(myPick)}</strong></div>`:''}
     </div>`;
   }
   // ── Waiting on card ──
@@ -975,7 +1013,7 @@ function renderPicks(){
     if(!locked&&missing.length>0){
       waitingCard.style.display='';
       waitingCount.textContent=missing.length;
-      waitingList.innerHTML=missing.map(p=>`<span style="display:inline-block;background:var(--surface2);border-radius:20px;padding:4px 12px;margin:3px 4px 3px 0;font-weight:600;">${p.name}</span>`).join('');
+      waitingList.innerHTML=missing.map(p=>`<span style="display:inline-block;background:var(--surface2);border-radius:20px;padding:4px 12px;margin:3px 4px 3px 0;font-weight:600;">${esc(p.name)}</span>`).join('');
     } else {
       waitingCard.style.display='none';
     }
@@ -985,7 +1023,7 @@ function renderPicks(){
     const pMode=currentRaceMode();
     const pUsed=pMode==='final'?new Set():usedDrivers(p.name,pMode);
     const rem=DRIVERS.length-pUsed.size;
-    return`<div class="standing-row"><div style="flex:1"><div style="font-weight:600;font-size:14px">${p.name}</div>${pMode!=='final'?`<div style="font-size:11px;color:var(--text3)">${rem} drivers left</div>`:''}</div><div style="font-size:13px;color:${pick?'var(--text)':'var(--text3)'}">${pick||(locked?'—':'Pending')}</div></div>`;
+    return`<div class="standing-row"><div style="flex:1"><div style="font-weight:600;font-size:14px">${esc(p.name)}</div>${pMode!=='final'?`<div style="font-size:11px;color:var(--text3)">${rem} drivers left</div>`:''}</div><div style="font-size:13px;color:${pick?'var(--text)':'var(--text3)'}">${esc(pick||(locked?'—':'Pending'))}</div></div>`;
   }).join('');
 }
 function savePick(){
@@ -997,7 +1035,7 @@ function savePick(){
   const used=isFinal?new Set():usedDrivers(currentUser.name, raceMode);
   if(used.has(d)){toast('You already used that driver this season');return;}
   state.picks[currentUser.name]=d;
-  saveState();toast(`Pick saved: ${d}`);
+  saveState();toast(`Pick saved: ${esc(d)}`);
 }
 
 /* ── RESULTS ── */
@@ -1029,10 +1067,10 @@ function renderResultInputs(){
             <option value="">— select driver —</option>
             ${[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b))).map(d=>{const wu=used.has(dName(d));const val=dName(d);const lbl=dNum(d)?`#${dNum(d)} ${dName(d)}`:dName(d);return`<option value="${val}" ${wu?'disabled':''}>${wu?'✕ ':''}${lbl}${wu?' (used)':''}</option>`;}).join('')}
           </select></div>`
-      :`<div class="fast-player-driver">${pick||'No pick set'}</div>`;
+      :`<div class="fast-player-driver">${esc(pick||'No pick set')}</div>`;
     return`<div class="fast-player">
       <div class="fast-player-header">
-        <div><div class="fast-player-name">${p.name}</div>${resultMode==='current'?driverField:''}</div>
+        <div><div class="fast-player-name">${esc(p.name)}</div>${resultMode==='current'?driverField:''}</div>
         <div class="fast-score-preview" id="preview-${pid}">0 pts</div>
       </div>
       ${resultMode==='backfill'?driverField:''}
@@ -1175,7 +1213,7 @@ async function fetchNascarResults(){
       : ' · ⚠️ Stage points not matched (may still be loading)';
     statusEl.style.background = flagState===9?'rgba(74,232,138,.1)':'rgba(232,200,74,.1)';
     statusEl.style.color = flagState===9?'var(--success)':'var(--accent)';
-    statusEl.innerHTML = `${raceStatus} · ${runName} · Winner: ${winner} · ${filled}/${state.players.length} players filled${stageStatus}${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+missing.join(', ')+'</span>':''}`;
+    statusEl.innerHTML = `${raceStatus} · ${runName} · Winner: ${esc(winner)} · ${filled}/${state.players.length} players filled${stageStatus}${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+missing.join(', ')+'</span>':''}`;
 
   } catch(e){
     statusEl.style.color='var(--danger)';
@@ -1195,7 +1233,7 @@ function renderResults(){
       const pid='edit_'+idx+'_'+e.player.replace(/\s+/g,'_');
       const rawPts=e.won?e.pts-10:e.pts;
       return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-        <div style="flex:1;font-size:13px;font-weight:600">${e.player}<div style="font-size:11px;color:var(--text2);font-weight:400">${e.driver}</div></div>
+        <div style="flex:1;font-size:13px;font-weight:600">${esc(e.player)}<div style="font-size:11px;color:var(--text2);font-weight:400">${esc(e.driver)}</div></div>
         <input type="number" min="0" id="${pid}-pts" value="${rawPts}" inputmode="numeric" style="width:64px;font-size:16px;font-weight:700;text-align:center;padding:5px 6px;">
         <button id="${pid}-win" data-won="${e.won?'1':'0'}" onclick="toggleEditWin('${pid}')" style="padding:6px 10px;border-radius:var(--r-sm);border:1px solid ${e.won?'var(--accent)':'var(--border2)'};background:${e.won?'var(--accent)':'transparent'};color:${e.won?'#0a0a0a':'var(--text2)'};font-family:var(--font-display);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+10 WIN</button>
       </div>`;
@@ -1203,15 +1241,15 @@ function renderResults(){
     const isComm=currentUser.role==='commissioner'||currentUser.role==='admin';
     return`<div class="race-chip" id="race-chip-${idx}">
       <div class="race-chip-name" style="display:flex;align-items:center;justify-content:space-between">
-        <span>${r.name}${tag}</span>
+        <span>${esc(r.name)}${tag}</span>
         ${isComm?`<div style="display:flex;gap:6px;">
           <button onclick="toggleRaceEdit(${idx})" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:2px 8px;">Edit</button>
           <button onclick="deleteRace(${idx})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 6px;">Delete</button>
         </div>`:''}
       </div>
-      ${r.track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${r.track}</div>`:''}
-      ${r.winnerDriver?`<div style="font-size:12px;background:rgba(232,200,74,.1);color:var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:6px;display:inline-block;">🏆 ${r.winnerDriver}${r.winnerPts?' · '+r.winnerPts+' pts':''}</div>`:''}
-      <div id="race-view-${idx}">${[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${e.player} — ${e.driver}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('')}</div>
+      ${r.track?`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">${esc(r.track)}</div>`:''}
+      ${r.winnerDriver?`<div style="font-size:12px;background:rgba(232,200,74,.1);color:var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:6px;display:inline-block;">🏆 ${esc(r.winnerDriver)}${r.winnerPts?' · '+r.winnerPts+' pts':''}</div>`:''}
+      <div id="race-view-${idx}">${[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>`<div class="race-chip-row"><span>${esc(e.player)} — ${esc(e.driver)}${e.won?' 🏆':''}</span><span>${e.pts}pts</span></div>`).join('')}</div>
       ${isComm?`<div id="race-edit-${idx}" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
           <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:3px">Race Name</label>
@@ -1286,7 +1324,7 @@ function submitResults(){
   });
   state.races.push({name,track,raceType,entries,backfill:isBackfill,winnerDriver,winnerPts});
   if(!isBackfill){state.picks={};if(state.schedule&&state.schedule.length)state.schedule.shift();syncNextRaceFromSchedule();}
-  saveState();toast(`${isBackfill?'Past race':'Race'} saved: ${name}`);
+  saveState();toast(`${isBackfill?'Past race':'Race'} saved: ${esc(name)}`);
   document.getElementById('res-race-name').value='';
   document.getElementById('res-track-name').value='';
   const rt=document.getElementById('res-race-type');if(rt)rt.value='regular';
@@ -1457,8 +1495,8 @@ function renderHistory(){
     ?`<div class="card-title">All-Time Standings</div>`+atSorted.map((p,i)=>{
         const rc=i===0?'p1':i===1?'p2':i===2?'p3':'';
         const chYears=(championMap()[p.name]||[]);
-        const trophyBadges=chYears.map(y=>`<span class="champ-badge">🏆 ${y}</span>`).join('');
-        return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${p.name}</div><div class="standing-driver">${p.wins} season win${p.wins!==1?'s':''} · ${p.seasons} season${p.seasons!==1?'s':''}</div>${trophyBadges?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophyBadges}</div>`:''}</div><div class="standing-pts">${p.totalPts}</div></div>`;
+        const trophyBadges=chYears.map(y=>`<span class="champ-badge">🏆 ${esc(y)}</span>`).join('');
+        return`<div class="standing-row"><div class="standing-rank ${rc}">${i+1}</div><div class="standing-info"><div class="standing-name">${esc(p.name)}</div><div class="standing-driver">${p.wins} season win${p.wins!==1?'s':''} · ${p.seasons} season${p.seasons!==1?'s':''}</div>${trophyBadges?`<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${trophyBadges}</div>`:''}</div><div class="standing-pts">${p.totalPts}</div></div>`;
       }).join('')
     :'<div class="text-muted text-center">No history yet</div>';
   const sl=document.getElementById('history-seasons-list');
@@ -1474,18 +1512,18 @@ function renderHistory(){
     const raceCount=(season.races||[]).length;
     return`<div class="season-card">
       <div class="season-header" onclick="toggleSeason('sbd-${idx}')">
-        <div class="season-year">${season.year}</div>
+        <div class="season-year">${esc(season.year)}</div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
           <div style="display:flex;gap:10px;align-items:center;">
-            ${top3[0]?`<span style="font-size:12px;font-weight:600;color:var(--accent)">🥇 ${top3[0][0]}</span>`:''}
-            ${top3[1]?`<span style="font-size:12px;color:#aaa">🥈 ${top3[1][0]}</span>`:''}
-            ${top3[2]?`<span style="font-size:12px;color:#c4845a">🥉 ${top3[2][0]}</span>`:''}
+            ${top3[0]?`<span style="font-size:12px;font-weight:600;color:var(--accent)">🥇 ${esc(top3[0][0])}</span>`:''}
+            ${top3[1]?`<span style="font-size:12px;color:#aaa">🥈 ${esc(top3[1][0])}</span>`:''}
+            ${top3[2]?`<span style="font-size:12px;color:#c4845a">🥉 ${esc(top3[2][0])}</span>`:''}
           </div>
         </div>
       </div>
       <div class="season-body" id="sbd-${idx}">
         <div class="season-podium">
-          ${top3.map((p,i)=>`<div class="podium-card"><div class="podium-pos ${posClass[i]}">${i+1}</div><div class="podium-name">${p[0]}</div><div class="podium-pts">${p[1]} pts</div>${hasPlayoffsH?`<div style="font-size:9px;color:var(--text3);margin-top:2px">playoff</div>`:''}  </div>`).join('')}
+          ${top3.map((p,i)=>`<div class="podium-card"><div class="podium-pos ${posClass[i]}">${i+1}</div><div class="podium-name">${esc(p[0])}</div><div class="podium-pts">${p[1]} pts</div>${hasPlayoffsH?`<div style="font-size:9px;color:var(--text3);margin-top:2px">playoff</div>`:''}  </div>`).join('')}
         </div>
         <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
           <div style="font-size:12px;color:var(--text2);letter-spacing:1px;text-transform:uppercase">Races</div>
@@ -1493,10 +1531,10 @@ function renderHistory(){
         </div>
         ${(season.races||[]).map(r=>`
           <div class="hist-race-row">
-            <div><div style="display:flex;align-items:center;gap:6px"><div class="hist-race-name">${r.name}</div>${r.raceType==='postseason'?'<span class="pill pill-gold" style="font-size:9px">Post Season</span>':r.raceType==='final'?'<span class="pill pill-danger" style="font-size:9px">Final</span>':''}</div>
-            ${r.track?`<div style="font-size:11px;color:var(--text3)">${r.track}</div>`:''}
-            ${r.winnerDriver?`<div style="font-size:11px;color:var(--accent)">🏆 ${r.winnerDriver}${r.winnerPts?' · '+r.winnerPts+'pts':''}</div>`:''}
-            <div class="hist-race-winner">${[...r.entries].sort((a,b)=>b.pts-a.pts)[0]?.player||'—'} led</div></div>
+            <div><div style="display:flex;align-items:center;gap:6px"><div class="hist-race-name">${esc(r.name)}</div>${r.raceType==='postseason'?'<span class="pill pill-gold" style="font-size:9px">Post Season</span>':r.raceType==='final'?'<span class="pill pill-danger" style="font-size:9px">Final</span>':''}</div>
+            ${r.track?`<div style="font-size:11px;color:var(--text3)">${esc(r.track)}</div>`:''}
+            ${r.winnerDriver?`<div style="font-size:11px;color:var(--accent)">🏆 ${esc(r.winnerDriver)}${r.winnerPts?' · '+r.winnerPts+'pts':''}</div>`:''}
+            <div class="hist-race-winner">${esc(([...r.entries].sort((a,b)=>b.pts-a.pts)[0]?.player)||'—')} led</div></div>
             <button class="hist-expand-btn" onclick="showRaceDetail(${idx},'${r.name.replace(/'/g,"\'")}')">Details</button>
           </div>`).join('')}
       </div>
@@ -1719,7 +1757,7 @@ function renderPsPlayerRows(){
   c.innerHTML=state.players.map(p=>{
     const pid='ps_'+p.name.replace(/\s+/g,'_');
     return`<div class="fast-player" style="margin-bottom:8px">
-      <div class="fast-player-name" style="margin-bottom:8px">${p.name}</div>
+      <div class="fast-player-name" style="margin-bottom:8px">${esc(p.name)}</div>
       <div style="margin-bottom:6px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver</label>
         <select id="${pid}-drv">
           <option value="">— select —</option>
@@ -1810,7 +1848,7 @@ function renderEsRacesList(){
   el.innerHTML = season.races.map((r,ri)=>`
     <div class="race-chip" style="margin-bottom:10px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <div style="font-weight:600;font-size:14px;">${r.name}</div>
+        <div style="font-weight:600;font-size:14px;">${esc(r.name)}</div>
         <button onclick="deleteSeasonRace(${ri})" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;">Remove</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
@@ -1859,7 +1897,7 @@ function renderEsPlayerRows(){
   c.innerHTML=state.players.map(p=>{
     const pid='es_'+p.name.replace(/\s+/g,'_');
     return`<div class="fast-player" style="margin-bottom:8px;">
-      <div class="fast-player-name" style="margin-bottom:8px">${p.name}</div>
+      <div class="fast-player-name" style="margin-bottom:8px">${esc(p.name)}</div>
       <div style="margin-bottom:6px"><label style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);display:block;margin-bottom:4px">Driver</label>
         <select id="${pid}-drv">
           <option value="">— select —</option>
@@ -1901,7 +1939,7 @@ function esAddRace(){
     const wb=document.getElementById(pid+'-win');
     if(wb){wb.dataset.won='0';wb.style.background='transparent';wb.style.color='var(--text2)';wb.style.borderColor='var(--border2)';}
   });
-  renderEsRacesList();toast(`Race added: ${name}`);
+  renderEsRacesList();toast(`Race added: ${esc(name)}`);
 }
 
 function saveEditSeason(){
@@ -2137,7 +2175,7 @@ function renderDriverList(){
     const esc=dName(d).replace(/'/g,"\'");
     return`<div style="background:var(--surface2);border-radius:var(--r-sm);margin-bottom:5px;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;">
-        <div style="font-size:14px;font-weight:600">${dNum(d)?`<span style="font-family:var(--font-display);color:var(--accent)">#${dNum(d)}</span> `:''  }${dName(d)}</div>
+        <div style="font-size:14px;font-weight:600">${dNum(d)?`<span style="font-family:var(--font-display);color:var(--accent)">#${dNum(d)}</span> `:''  }${esc(dName(d))}</div>
         <div style="display:flex;gap:6px;">
           <button onclick="toggleDriverEdit(${globalIdx})" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:3px 8px;">Edit</button>
           <button onclick="removeDriver('${esc}')" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 8px;">Remove</button>
@@ -2184,12 +2222,14 @@ function saveDriverEdit(idx){
   }
   DRIVERS[idx]={name:newName,number:newNum};
   state.drivers=DRIVERS;
-  saveState();toast(`Updated: #${newNum} ${newName}`);renderDriverList();
+  saveState();toast(`Updated: #${esc(newNum)} ${esc(newName)}`);renderDriverList();
 }
 function addDriver(){
   const name=document.getElementById('new-driver-name').value.trim();
   const number=document.getElementById('new-driver-number').value.trim();
   if(!name){toast('Enter a driver name');return;}
+  if(name.length>50){toast('Driver name too long');return;}
+  if(number.length>5){toast('Car number too long');return;}
   if(DRIVERS.find(d=>dName(d).toLowerCase()===name.toLowerCase())){toast('Driver already exists');return;}
   DRIVERS.push({name,number});
   state.drivers=DRIVERS;
@@ -2209,14 +2249,14 @@ function retireDriver(name){
   if(!d)return;
   d.retired=true;
   state.drivers=DRIVERS;
-  saveState();renderDriverList();toast(`${name} retired`);
+  saveState();renderDriverList();toast(`${esc(name)} retired`);
 }
 function unretireDriver(name){
   const d=DRIVERS.find(d=>dName(d)===name);
   if(!d)return;
   d.retired=false;
   state.drivers=DRIVERS;
-  saveState();renderDriverList();toast(`${name} unretired`);
+  saveState();renderDriverList();toast(`${esc(name)} unretired`);
 }
 
 /* ── ADMIN ── */
@@ -2228,10 +2268,10 @@ function renderAdmin(){
     const isMe=p.name===currentUser.name;
     const isComissioner=p.role==='commissioner';
     const roleBadge=isComissioner?'<span class="pill pill-gold">Commissioner</span>':p.role==='admin'?'<span class="pill pill-info">Admin</span>':'<span class="pill pill-muted">Player</span>';
-    const toggleBtn=!isComissioner&&!isMe?`<button onclick="toggleAdmin('${p.name}')" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:4px 8px;">${p.role==='admin'?'Revoke admin':'Make admin'}</button>`:'';
-    const removeBtn=!isComissioner&&!isMe?`<button class="remove-btn" onclick="removePlayer('${p.name}')">Remove</button>`:'';
-    const editBtn=`<button onclick="editPlayer('${p.name}')" style="font-size:11px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:6px;cursor:pointer;padding:4px 8px;">Rename</button>`;
-    return`<div class="player-row"><div><div class="player-row-name">${p.name}</div><div style="margin-top:3px">${roleBadge}</div></div><div style="display:flex;gap:6px;align-items:center">${editBtn}${toggleBtn}${removeBtn}</div></div>`;
+    const toggleBtn=!isComissioner&&!isMe?`<button onclick="toggleAdmin('${jsEsc(p.name)}')" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:4px 8px;">${p.role==='admin'?'Revoke admin':'Make admin'}</button>`:'';
+    const removeBtn=!isComissioner&&!isMe?`<button class="remove-btn" onclick="removePlayer('${jsEsc(p.name)}')">Remove</button>`:'';
+    const editBtn=`<button onclick="editPlayer('${jsEsc(p.name)}')" style="font-size:11px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:6px;cursor:pointer;padding:4px 8px;">Rename</button>`;
+    return`<div class="player-row"><div><div class="player-row-name">${esc(p.name)}</div><div style="margin-top:3px">${roleBadge}</div></div><div style="display:flex;gap:6px;align-items:center">${editBtn}${toggleBtn}${removeBtn}</div></div>`;
   }).join('');
   // Show commissioner's timezone next to the label
   const tzLabel=document.getElementById('admin-tz-label');
@@ -2279,6 +2319,8 @@ function editPlayer(name){
   const newName=prompt('Enter new name for '+name+':',name);
   if(!newName||newName.trim()===name)return;
   const trimmed=newName.trim();
+  if(trimmed.length>30){toast('Name must be 30 characters or less');return;}
+  if(!/^[\w\s.\-']+$/i.test(trimmed)){toast('Name contains invalid characters');return;}
   if(state.players.find(p=>p.name.toLowerCase()===trimmed.toLowerCase()&&p.name!==name)){
     toast('That name is already taken');return;
   }
@@ -2293,23 +2335,26 @@ function editPlayer(name){
   });
   p.name=trimmed;
   if(currentUser.name===name)currentUser=p;
-  saveState();toast(`Renamed to ${trimmed}`);renderAdmin();
+  saveState();toast(`Renamed to ${esc(trimmed)}`);renderAdmin();
 }
-function addPlayer(){
+async function addPlayer(){
   const name=document.getElementById('new-pname').value.trim();
   const pass=document.getElementById('new-ppass').value;
   if(!name||!pass){toast('Enter name and password');return;}
+  if(name.length>30){toast('Name must be 30 characters or less');return;}
+  if(pass.length<4){toast('Password must be at least 4 characters');return;}
   if(state.players.find(p=>p.name.toLowerCase()===name.toLowerCase())){toast('Player already exists');return;}
-  state.players.push({name,password:pass,role:'player'});
+  const hashed=await hashPassword(pass);
+  state.players.push({name,password:hashed,role:'player'});
   saveState();
   document.getElementById('new-pname').value='';
   document.getElementById('new-ppass').value='';
-  toast(`Added ${name}`);renderAdmin();
+  toast(`Added ${esc(name)}`);renderAdmin();
 }
 function removePlayer(name){
   state.players=state.players.filter(p=>p.name!==name);
   delete state.picks[name];
-  saveState();toast(`Removed ${name}`);renderAdmin();
+  saveState();toast(`Removed ${esc(name)}`);renderAdmin();
 }
 function addScheduledRace(){
   const name=document.getElementById('admin-race-name').value.trim();
@@ -2330,7 +2375,7 @@ function addScheduledRace(){
   document.getElementById('admin-deadline').value='';
   document.getElementById('admin-playoff-mode').value='regular';
   document.getElementById('admin-tv-network').value='';
-  saveState();toast(`${name} added to schedule`);renderAdmin();
+  saveState();toast(`${esc(name)} added to schedule`);renderAdmin();
 }
 function tvNetworkBadge(network){
   if(!network) return '';
@@ -2399,7 +2444,7 @@ function renderAdminSchedule(){
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           ${i===0?'<span style="font-size:10px;color:var(--accent);font-family:var(--font-display);font-weight:700;letter-spacing:1px;">NEXT</span>':'<span style="font-size:11px;color:var(--text3);">${i+1}.</span>'}
-          <span style="font-size:14px;font-weight:600;">${r.name}</span>
+          <span style="font-size:14px;font-weight:600;">${esc(r.name)}</span>
           <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span>
           ${r.network?tvNetworkBadge(r.network):''}
         </div>
@@ -2408,7 +2453,7 @@ function renderAdminSchedule(){
           <button onclick="removeScheduledRace(${i})" style="font-size:11px;padding:3px 8px;border-radius:5px;background:none;border:1px solid rgba(232,74,74,.3);color:var(--danger);cursor:pointer;">✕</button>
         </div>
       </div>
-      ${r.track?`<div style="font-size:12px;color:var(--text2);">${r.track}</div>`:''}
+      ${r.track?`<div style="font-size:12px;color:var(--text2);">${esc(r.track)}</div>`:''}
       <div style="font-size:11px;color:var(--text3);margin-top:2px;">🔒 ${dl}</div>
       <div id="sched-edit-${i}" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
@@ -2470,16 +2515,20 @@ function saveRaceSetup(){
 }
 
 /* ── CHANGE PASSWORD ── */
-function changePassword(){
+async function changePassword(){
   const cur=document.getElementById('pw-current').value;
   const nw=document.getElementById('pw-new').value;
   const cf=document.getElementById('pw-confirm').value;
   const err=document.getElementById('pw-error');err.textContent='';
-  if(cur!==currentUser.password){err.textContent='Current password is incorrect';return;}
+  const curHash=await hashPassword(cur);
+  const storedPw=currentUser.password;
+  const match=isHashed(storedPw)?curHash===storedPw:cur===storedPw;
+  if(!match){err.textContent='Current password is incorrect';return;}
   if(nw.length<4){err.textContent='Must be at least 4 characters';return;}
   if(nw!==cf){err.textContent='Passwords do not match';return;}
-  state.players.find(p=>p.name===currentUser.name).password=nw;
-  currentUser.password=nw;saveState();
+  const newHash=await hashPassword(nw);
+  state.players.find(p=>p.name===currentUser.name).password=newHash;
+  currentUser.password=newHash;saveState();
   document.getElementById('pw-current').value='';
   document.getElementById('pw-new').value='';
   document.getElementById('pw-confirm').value='';
@@ -2504,11 +2553,11 @@ function setPickForPlayer(playerName, pid){
   const used=raceMode==='final'?new Set():usedDrivers(playerName,raceMode);
   if(used.has(sel.value)){toast(`${playerName} already used that driver`);return;}
   state.picks[playerName]=sel.value;
-  saveState();toast(`Set ${playerName}'s pick: ${sel.value}`);renderAdminPicks();
+  saveState();toast(`Set ${esc(playerName)}'s pick: ${esc(sel.value)}`);renderAdminPicks();
 }
 function clearPickForPlayer(playerName){
   delete state.picks[playerName];
-  saveState();toast(`Cleared ${playerName}'s pick`);renderAdminPicks();
+  saveState();toast(`Cleared ${esc(playerName)}'s pick`);renderAdminPicks();
 }
 window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
 window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup; window.addScheduledRace=addScheduledRace; window.removeScheduledRace=removeScheduledRace; window.moveScheduledRace=moveScheduledRace; window.toggleScheduleEdit=toggleScheduleEdit; window.saveScheduleEdit=saveScheduleEdit;
