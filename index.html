@@ -479,6 +479,7 @@ select option:disabled{color:var(--text3);}
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script>
 const firebaseConfig = {
   apiKey: "AIzaSyAwOUsAovEOAxTQ5KP3RR6Xbg9uXGozphQ",
@@ -492,6 +493,17 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const STATE_REF = db.collection('league').doc('state');
+const PICKS_COL = db.collection('league').doc('state').collection('picks');
+const auth = firebase.auth();
+
+// Secondary app instance for creating user accounts without signing out current user
+const secondaryApp = firebase.initializeApp(firebaseConfig, 'secondary');
+const secondaryAuth = secondaryApp.auth();
+
+// Generate a deterministic email from a player name (users never see this)
+function emailFromName(name){
+  return name.trim().toLowerCase().replace(/[^a-z0-9]/g,'.')+'@nascar-fantasy-app.firebaseapp.com';
+}
 
 /* ── SECURITY UTILITIES ── */
 // HTML-escape to prevent XSS when inserting user data into innerHTML
@@ -560,13 +572,15 @@ function dLastName(d){
 }
 
 let state=null, currentUser=null, countdownTimer=null, _saveTimer=null, _notifiedDeadline=null;
+let _picksUnsubscribe=null, _stateUnsubscribe=null, _currentUid=null;
 
 function defaultState(){
   return{
     players:[{name:'Commissioner',password:'admin',role:'commissioner'}],
     nextRace:'',nextTrack:'',deadline:'',playoffMode:false,
     picks:{},races:[],pastSeasons:[],playoffBonuses:{},schedule:[],
-    drivers:[...DEFAULT_DRIVERS]
+    drivers:[...DEFAULT_DRIVERS],
+    commissionerUIDs:[]
   };
 }
 
@@ -584,7 +598,8 @@ async function initFirestore(){
     showError('Could not connect to database. Check your internet connection.');
     return;
   }
-  STATE_REF.onSnapshot((snap)=>{
+  // Subscribe to state document
+  _stateUnsubscribe = STATE_REF.onSnapshot((snap)=>{
     if(!snap.exists)return;
     const data = snap.data();
     // migrate
@@ -593,6 +608,7 @@ async function initFirestore(){
     data.drivers = data.drivers.map(d=>typeof d==='string'?{name:d,number:''}:d);
     if(!data.picks) data.picks={};
   if(!data.playoffBonuses) data.playoffBonuses={};
+  if(!data.commissionerUIDs) data.commissionerUIDs=[];
   if(!data.schedule) data.schedule=[];
   // Sort schedule by deadline on every load
   if(data.schedule.length>1) data.schedule.sort((a,b)=>{if(!a.deadline&&!b.deadline)return 0;if(!a.deadline)return 1;if(!b.deadline)return -1;return new Date(a.deadline)-new Date(b.deadline);});
@@ -612,6 +628,60 @@ async function initFirestore(){
     console.error('Firestore snapshot error',err);
     showError('Lost connection to database.');
   });
+  // Subscribe to picks subcollection — keeps state.picks in sync
+  subscribePicks();
+}
+
+/* ── PICKS SUBCOLLECTION ── */
+function subscribePicks(){
+  if(_picksUnsubscribe) _picksUnsubscribe();
+  _picksUnsubscribe = PICKS_COL.onSnapshot((snap)=>{
+    if(!state) return;
+    const picks={};
+    snap.forEach(doc=>{
+      const d=doc.data();
+      if(d.playerName && d.driver) picks[d.playerName]=d.driver;
+    });
+    state.picks=picks;
+    // Re-render if logged in
+    if(currentUser){
+      const activeTab = document.querySelector('.nav-item.active')?.dataset?.tab;
+      if(activeTab==='leaderboard'||activeTab==='picks') renderTab(activeTab);
+    }
+  });
+}
+
+async function savePickToDb(playerName, driver){
+  // Use player's Firebase Auth UID as doc ID if available, else use sanitized name
+  const player=state.players.find(p=>p.name===playerName);
+  const docId=player?.uid || playerName.replace(/[^a-zA-Z0-9_-]/g,'_');
+  try{
+    await PICKS_COL.doc(docId).set({playerName, driver, updatedAt: new Date().toISOString()});
+  }catch(e){
+    console.error('Save pick error',e);
+    toast('Failed to save pick — check connection');
+  }
+}
+
+async function deletePickForPlayer(playerName){
+  const player=state.players.find(p=>p.name===playerName);
+  const docId=player?.uid || playerName.replace(/[^a-zA-Z0-9_-]/g,'_');
+  try{
+    await PICKS_COL.doc(docId).delete();
+  }catch(e){ console.error('Delete pick error',e); }
+}
+
+async function clearAllPicks(){
+  try{
+    const snap=await PICKS_COL.get();
+    const batch=db.batch();
+    snap.forEach(doc=>batch.delete(doc.ref));
+    await batch.commit();
+    state.picks={};
+  }catch(e){
+    console.error('Clear picks error',e);
+    toast('Failed to clear picks');
+  }
 }
 
 async function saveState(){
@@ -620,7 +690,10 @@ async function saveState(){
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async ()=>{
     try{
-      await STATE_REF.set(JSON.parse(JSON.stringify(state)));
+      // Clone state and remove picks — they're stored in subcollection now
+      const toSave=JSON.parse(JSON.stringify(state));
+      delete toSave.picks;
+      await STATE_REF.set(toSave);
     }catch(e){
       console.error('Save error',e);
       toast('Save failed — check connection');
@@ -648,24 +721,73 @@ async function doLogin(){
   if(!state){toast('Still connecting…');return;}
   const u=document.getElementById('login-user').value.trim();
   const p=document.getElementById('login-pass').value;
+  const errEl=document.getElementById('login-error');
+  errEl.textContent='';
   const player=state.players.find(pl=>pl.name.toLowerCase()===u.toLowerCase());
-  if(!player){document.getElementById('login-error').textContent='Invalid username or password';return;}
+  if(!player){errEl.textContent='Invalid username or password';return;}
+  const email=emailFromName(player.name);
+
+  // Try Firebase Auth sign-in first (already migrated accounts)
+  if(player.uid){
+    try{
+      await auth.signInWithEmailAndPassword(email, p);
+      _currentUid=auth.currentUser.uid;
+      currentUser=player;
+      enterApp();
+      return;
+    }catch(e){
+      if(e.code==='auth/wrong-password'||e.code==='auth/invalid-credential'){
+        errEl.textContent='Invalid username or password';return;
+      }
+      // If user-not-found, fall through to legacy migration
+      if(e.code!=='auth/user-not-found'){
+        console.error('Auth error',e);
+        errEl.textContent='Login error — try again';return;
+      }
+    }
+  }
+
+  // Legacy path: verify against Firestore-stored hash, then create Firebase Auth account
   const hashed=await hashPassword(p);
   if(isHashed(player.password)){
-    // Already migrated — compare hashes
-    if(hashed!==player.password){document.getElementById('login-error').textContent='Invalid username or password';return;}
+    if(hashed!==player.password){errEl.textContent='Invalid username or password';return;}
   } else {
-    // Legacy plaintext — compare, then migrate to hashed
-    if(p!==player.password){document.getElementById('login-error').textContent='Invalid username or password';return;}
+    if(p!==player.password){errEl.textContent='Invalid username or password';return;}
+    // Migrate plaintext → hash
     player.password=hashed;
-    saveState();
   }
+
+  // Create Firebase Auth account for this player
+  try{
+    const cred=await auth.createUserWithEmailAndPassword(email, p);
+    _currentUid=cred.user.uid;
+    player.uid=_currentUid;
+    saveState();
+  }catch(e){
+    if(e.code==='auth/email-already-in-use'){
+      // Account exists but UID wasn't stored — sign in instead
+      try{
+        await auth.signInWithEmailAndPassword(email, p);
+        _currentUid=auth.currentUser.uid;
+        player.uid=_currentUid;
+        saveState();
+      }catch(e2){
+        console.error('Auth sign-in fallback error',e2);
+        errEl.textContent='Login error — try again';return;
+      }
+    }else{
+      console.error('Auth create error',e);
+      // Allow login anyway if Auth fails (graceful degradation)
+      _currentUid=null;
+    }
+  }
+
   currentUser=player;
-  document.getElementById('login-error').textContent='';
   enterApp();
 }
 function doLogout(){
-  currentUser=null;clearInterval(countdownTimer);
+  auth.signOut().catch(e=>console.error('Sign out error',e));
+  currentUser=null;_currentUid=null;clearInterval(countdownTimer);
   document.getElementById('main-screen').classList.remove('active');
   document.getElementById('main-screen').style.display='none';
   document.getElementById('login-screen').classList.add('active');
@@ -678,6 +800,14 @@ function enterApp(){
   document.getElementById('main-screen').classList.add('active');
   document.getElementById('main-screen').style.display='';
   requestNotifyPermission();
+  // Sync commissioner UIDs for security rules
+  if(_currentUid && (currentUser.role==='commissioner'||currentUser.role==='admin')){
+    if(!state.commissionerUIDs) state.commissionerUIDs=[];
+    if(!state.commissionerUIDs.includes(_currentUid)){
+      state.commissionerUIDs.push(_currentUid);
+      saveState();
+    }
+  }
   const isComm=currentUser.role==='commissioner'||currentUser.role==='admin';
   document.getElementById('nav-results').style.display='';
   document.getElementById('nav-admin').style.display=isComm?'':'none';
@@ -1035,7 +1165,8 @@ function savePick(){
   const used=isFinal?new Set():usedDrivers(currentUser.name, raceMode);
   if(used.has(d)){toast('You already used that driver this season');return;}
   state.picks[currentUser.name]=d;
-  saveState();toast(`Pick saved: ${esc(d)}`);
+  savePickToDb(currentUser.name, d);
+  toast(`Pick saved: ${esc(d)}`);
 }
 
 /* ── RESULTS ── */
@@ -1323,7 +1454,7 @@ function submitResults(){
     return{player:p.name,driver,won,pts:calcScore(pts,won)};
   });
   state.races.push({name,track,raceType,entries,backfill:isBackfill,winnerDriver,winnerPts});
-  if(!isBackfill){state.picks={};if(state.schedule&&state.schedule.length)state.schedule.shift();syncNextRaceFromSchedule();}
+  if(!isBackfill){clearAllPicks();if(state.schedule&&state.schedule.length)state.schedule.shift();syncNextRaceFromSchedule();}
   saveState();toast(`${isBackfill?'Past race':'Race'} saved: ${esc(name)}`);
   document.getElementById('res-race-name').value='';
   document.getElementById('res-track-name').value='';
@@ -1456,14 +1587,14 @@ function closeSeason(){
     playoffBonuses:{...(state.playoffBonuses||{})},
     closed:true
   });
-  state.races=[];state.picks={};state.nextRace='';state.nextTrack='';
+  state.races=[];clearAllPicks();state.nextRace='';state.nextTrack='';
   state.deadline='';state.seasonClosed=false;
   state.playoffBonuses={};state.regularSeasonArchive=[];state.schedule=[];
   saveState();toast('Season closed and archived');renderResults();renderLeaderboard();
 }
 function openNewSeason(){
   state.seasonClosed=false;state.playoffBonuses={};state.regularSeasonArchive=[];state.schedule=[];
-  state.races=[];state.picks={};state.nextRace='';state.nextTrack='';state.deadline='';
+  state.races=[];clearAllPicks();state.nextRace='';state.nextTrack='';state.deadline='';
   saveState();toast('New season started');renderResults();renderLeaderboard();
 }
 
@@ -2218,7 +2349,12 @@ function saveDriverEdit(idx){
     state.races.forEach(r=>{(r.entries||[]).forEach(e=>{if(e.driver===oldName)e.driver=newName;});if(r.winnerDriver===oldName)r.winnerDriver=newName;});
     state.pastSeasons.forEach(s=>{(s.races||[]).forEach(r=>{(r.entries||[]).forEach(e=>{if(e.driver===oldName)e.driver=newName;});if(r.winnerDriver===oldName)r.winnerDriver=newName;});});
     // Update picks
-    Object.keys(state.picks).forEach(p=>{if(state.picks[p]===oldName)state.picks[p]=newName;});
+    Object.keys(state.picks).forEach(p=>{
+      if(state.picks[p]===oldName){
+        state.picks[p]=newName;
+        savePickToDb(p, newName);
+      }
+    });
   }
   DRIVERS[idx]={name:newName,number:newNum};
   state.drivers=DRIVERS;
@@ -2311,6 +2447,15 @@ function toggleAdmin(name){
   const p=state.players.find(p=>p.name===name);
   if(!p||p.role==='commissioner')return;
   p.role=p.role==='admin'?'player':'admin';
+  // Update commissionerUIDs for security rules
+  if(!state.commissionerUIDs) state.commissionerUIDs=[];
+  if(p.uid){
+    if(p.role==='admin'&&!state.commissionerUIDs.includes(p.uid)){
+      state.commissionerUIDs.push(p.uid);
+    }else if(p.role==='player'){
+      state.commissionerUIDs=state.commissionerUIDs.filter(u=>u!==p.uid);
+    }
+  }
   saveState();toast(`${name} is now ${p.role==='admin'?'an admin':'a player'}`);renderAdmin();
 }
 function editPlayer(name){
@@ -2325,7 +2470,15 @@ function editPlayer(name){
     toast('That name is already taken');return;
   }
   // Update picks key
-  if(state.picks[name]!==undefined){state.picks[trimmed]=state.picks[name];delete state.picks[name];}
+  if(state.picks[name]!==undefined){
+    const driver=state.picks[name];
+    state.picks[trimmed]=driver;delete state.picks[name];
+    // Update subcollection: write new doc, delete old
+    savePickToDb(trimmed, driver);
+    // Old doc may have used old name as key — clean up
+    const oldDocId=p.uid || name.replace(/[^a-zA-Z0-9_-]/g,'_');
+    PICKS_COL.doc(oldDocId).update({playerName:trimmed}).catch(()=>{});
+  }
   // Update race entries
   state.races.forEach(r=>{(r.entries||[]).forEach(e=>{if(e.player===name)e.player=trimmed;});});
   // Update past season entries
@@ -2345,13 +2498,25 @@ async function addPlayer(){
   if(pass.length<4){toast('Password must be at least 4 characters');return;}
   if(state.players.find(p=>p.name.toLowerCase()===name.toLowerCase())){toast('Player already exists');return;}
   const hashed=await hashPassword(pass);
-  state.players.push({name,password:hashed,role:'player'});
+  const email=emailFromName(name);
+  let uid=null;
+  // Create Firebase Auth account using secondary app (doesn't sign out commissioner)
+  try{
+    const cred=await secondaryAuth.createUserWithEmailAndPassword(email, pass);
+    uid=cred.user.uid;
+    await secondaryAuth.signOut();
+  }catch(e){
+    console.warn('Could not create auth account for',name,e.message);
+    // Continue anyway — account will be created on their first login
+  }
+  state.players.push({name,password:hashed,role:'player',uid});
   saveState();
   document.getElementById('new-pname').value='';
   document.getElementById('new-ppass').value='';
   toast(`Added ${esc(name)}`);renderAdmin();
 }
 function removePlayer(name){
+  deletePickForPlayer(name);
   state.players=state.players.filter(p=>p.name!==name);
   delete state.picks[name];
   saveState();toast(`Removed ${esc(name)}`);renderAdmin();
@@ -2527,6 +2692,27 @@ async function changePassword(){
   if(nw.length<4){err.textContent='Must be at least 4 characters';return;}
   if(nw!==cf){err.textContent='Passwords do not match';return;}
   const newHash=await hashPassword(nw);
+  // Update Firebase Auth password
+  if(auth.currentUser){
+    try{
+      await auth.currentUser.updatePassword(nw);
+    }catch(e){
+      // If session is old, Firebase may require re-auth
+      if(e.code==='auth/requires-recent-login'){
+        try{
+          const email=emailFromName(currentUser.name);
+          const cred=firebase.auth.EmailAuthProvider.credential(email, cur);
+          await auth.currentUser.reauthenticateWithCredential(cred);
+          await auth.currentUser.updatePassword(nw);
+        }catch(e2){
+          console.error('Re-auth failed',e2);
+          err.textContent='Session expired — please sign out and back in, then try again';return;
+        }
+      }else{
+        console.error('Password update error',e);
+      }
+    }
+  }
   state.players.find(p=>p.name===currentUser.name).password=newHash;
   currentUser.password=newHash;saveState();
   document.getElementById('pw-current').value='';
@@ -2553,11 +2739,13 @@ function setPickForPlayer(playerName, pid){
   const used=raceMode==='final'?new Set():usedDrivers(playerName,raceMode);
   if(used.has(sel.value)){toast(`${playerName} already used that driver`);return;}
   state.picks[playerName]=sel.value;
-  saveState();toast(`Set ${esc(playerName)}'s pick: ${esc(sel.value)}`);renderAdminPicks();
+  savePickToDb(playerName, sel.value);
+  toast(`Set ${esc(playerName)}'s pick: ${esc(sel.value)}`);renderAdminPicks();
 }
 function clearPickForPlayer(playerName){
   delete state.picks[playerName];
-  saveState();toast(`Cleared ${esc(playerName)}'s pick`);renderAdminPicks();
+  deletePickForPlayer(playerName);
+  toast(`Cleared ${esc(playerName)}'s pick`);renderAdminPicks();
 }
 window.setPickForPlayer=setPickForPlayer; window.clearPickForPlayer=clearPickForPlayer;
 window.removePlayer=removePlayer; window.toggleAdmin=toggleAdmin; window.editPlayer=editPlayer; window.saveRaceSetup=saveRaceSetup; window.addScheduledRace=addScheduledRace; window.removeScheduledRace=removeScheduledRace; window.moveScheduledRace=moveScheduledRace; window.toggleScheduleEdit=toggleScheduleEdit; window.saveScheduleEdit=saveScheduleEdit;
