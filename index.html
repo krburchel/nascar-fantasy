@@ -623,6 +623,14 @@ async function initFirestore(){
       if(fresh) currentUser=fresh;
       const activeTab = document.querySelector('.nav-item.active')?.dataset?.tab||'leaderboard';
       renderTab(activeTab);
+    } else if(auth.currentUser){
+      // State just loaded but we have a persisted auth session — auto-login
+      _currentUid=auth.currentUser.uid;
+      const player=state.players.find(p=>p.uid===auth.currentUser.uid);
+      if(player){
+        currentUser=player;
+        enterApp();
+      }
     }
   }, (err)=>{
     console.error('Firestore snapshot error',err);
@@ -2755,7 +2763,22 @@ window.toggleRaceEdit=toggleRaceEdit; window.toggleEditWin=toggleEditWin; window
 /* ── BOOT ── */
 document.getElementById('login-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('login-pass').focus();});
 document.getElementById('login-pass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+
+// Initialize Firestore first (reads are allowed without auth),
+// then check for a persisted Firebase Auth session for auto-login
 initFirestore();
+
+auth.onAuthStateChanged(user=>{
+  if(user && state && !currentUser){
+    // Returning user with persisted session — auto-login
+    _currentUid=user.uid;
+    const player=state.players.find(p=>p.uid===user.uid);
+    if(player){
+      currentUser=player;
+      enterApp();
+    }
+  }
+});
 </script>
 <script>
 if('serviceWorker' in navigator){
