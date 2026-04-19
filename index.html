@@ -2170,13 +2170,13 @@ function renderDriverList(){
   const sorted=[...activeDrivers()].sort((a,b)=>dLastName(a).localeCompare(dLastName(b)));
   el.innerHTML=sorted.map((d,i)=>{
     const globalIdx=DRIVERS.findIndex(x=>dName(x)===dName(d));
-    const esc=dName(d).replace(/'/g,"\'");
+    const nameEsc=jsEsc(dName(d));
     return`<div style="background:var(--surface2);border-radius:var(--r-sm);margin-bottom:5px;overflow:hidden;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;">
         <div style="font-size:14px;font-weight:600">${dNum(d)?`<span style="font-family:var(--font-display);color:var(--accent)">#${dNum(d)}</span> `:''  }${esc(dName(d))}</div>
         <div style="display:flex;gap:6px;">
           <button onclick="toggleDriverEdit(${globalIdx})" style="font-size:11px;color:var(--info);background:none;border:1px solid rgba(74,158,232,.3);border-radius:6px;cursor:pointer;padding:3px 8px;">Edit</button>
-          <button onclick="removeDriver('${esc}')" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 8px;">Remove</button>
+          <button onclick="removeDriver('${nameEsc}')" style="font-size:11px;color:var(--danger);background:none;border:none;cursor:pointer;padding:2px 8px;">Remove</button>
         </div>
       </div>
       <div id="driver-edit-${globalIdx}" style="display:none;padding:0 10px 10px;">
