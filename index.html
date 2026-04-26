@@ -1123,95 +1123,144 @@ async function fetchNascarResults(){
   statusEl.style.display='';
   statusEl.style.background='var(--surface2)';
   statusEl.style.color='var(--text2)';
-  statusEl.textContent='Fetching live results from NASCAR...';
+  statusEl.textContent='Fetching results from ESPN...';
   try{
-    const [feedResp, stageResp] = await Promise.all([
-      fetch('https://cf.nascar.com/cacher/live/live-feed.json'),
-      fetch('https://cf.nascar.com/cacher/live/live-stage-points.json')
-    ]);
-    const data = await feedResp.json();
-    const stageData = await stageResp.json();
-    const flagState = data.flag_state;
-    const runName = data.run_name||'';
-    const vehicles = data.vehicles||[];
-    if(!vehicles.length){statusEl.style.color='var(--danger)';statusEl.textContent='No race data found.';return;}
+    // Step 1: Find the latest race ID from the ESPN results index
+    const PROXY='https://corsproxy.io/?url=';
+    const indexResp=await fetch(PROXY+encodeURIComponent('https://www.espn.com/racing/results'));
+    if(!indexResp.ok) throw new Error('Could not load ESPN results index ('+indexResp.status+')');
+    const indexHtml=await indexResp.text();
+    // ESPN uses two URL patterns: /raceresults/_/series/sprint/raceId/12345 and ?raceId=12345&series=sprint
+    const idMatches=[...indexHtml.matchAll(/raceId[=\/](\d{10,14})/g)].map(m=>m[1]);
+    if(!idMatches.length) throw new Error('Could not find any race IDs on ESPN');
+    // Filter to only races whose date (first 8 chars of ID = YYYYMMDD) is on or before today
+    const today=new Date().toISOString().slice(0,10).replace(/-/g,'');
+    const candidates=[...new Set(idMatches)].filter(id=>id.slice(0,8)<=today).sort().reverse();
+    if(!candidates.length) throw new Error('No completed races found on ESPN');
+    const raceId=candidates[0];
 
-    // Build stage bonus map: driver full_name -> total stage bonus pts
-    const stageBonusMap={};
-    const feedRaceId=data.race_id;
-    const stageRaceId=stageData[0]?.race_id;
-    const stageMatch=feedRaceId&&stageRaceId&&feedRaceId===stageRaceId;
-    let totalStagesFound=0, totalStageBonusPts=0;
-    if(stageMatch){
-      stageData.forEach(stage=>{
-        (stage.results||[]).forEach(r=>{
-          const name=r.driver?.full_name||r.full_name||'';
-          const bonus=r.stage_points||r.points||0;
-          if(name&&bonus){
-            stageBonusMap[name]=(stageBonusMap[name]||0)+bonus;
-            totalStageBonusPts+=bonus;
-          }
-        });
-        totalStagesFound++;
+    // Step 2: Fetch the race results page
+    const raceUrl='https://www.espn.com/racing/raceresults?raceId='+raceId+'&series=sprint';
+    const resp=await fetch(PROXY+encodeURIComponent(raceUrl));
+    if(!resp.ok) throw new Error('Could not load race results ('+resp.status+')');
+    const html=await resp.text();
+    const doc=new DOMParser().parseFromString(html,'text/html');
+
+    // Step 3: Extract race title / track name from the page
+    let raceTitle=(doc.querySelector('title')?.textContent||'').trim();
+    // Title looks like "2026 NASCAR Cup Series at Kansas Results"
+    let trackName='';
+    const titleMatch=raceTitle.match(/(?:Cup Series at\s+|Results from\s+)([^|·]+?)(?:\s+Results|$)/i);
+    if(titleMatch) trackName=titleMatch[1].trim();
+
+    // Step 4: Find the results table.
+    // ESPN race results have columns: POS | ST | NO. | DRIVER | TEAM | LAPS | STATUS | PTS | BONUS
+    // We pick the table where row[0].cells[7] looks like points (a number).
+    const tables=[...doc.querySelectorAll('table')];
+    let resultsTable=null;
+    for(const tbl of tables){
+      const rows=tbl.querySelectorAll('tr');
+      if(rows.length<5) continue;
+      // Look at a likely data row (skip headers)
+      for(let i=1;i<Math.min(rows.length,5);i++){
+        const cells=rows[i].querySelectorAll('td');
+        if(cells.length>=8 && /^\d+$/.test(cells[0].textContent.trim()) && /^\d+$/.test(cells[7]?.textContent.trim()||'')){
+          resultsTable=tbl;break;
+        }
+      }
+      if(resultsTable) break;
+    }
+    if(!resultsTable) throw new Error('Could not parse results table — page format may have changed');
+
+    // Step 5: Build driver -> {pos, finishPts, stageBonus, pts} map
+    const driverMap={};
+    let winner='', winnerPts=0;
+    const rows=resultsTable.querySelectorAll('tr');
+    for(const row of rows){
+      const cells=row.querySelectorAll('td');
+      if(cells.length<8) continue;
+      const posStr=cells[0].textContent.trim();
+      const pos=parseInt(posStr,10);
+      if(!pos) continue;
+      // Driver name is typically column 3 (after POS, ST, NO.)
+      // ESPN may render as "Kyle Larson" or with a link wrapper.
+      const driverCell=cells[3];
+      if(!driverCell) continue;
+      const driverName=driverCell.textContent.trim().replace(/\s+/g,' ');
+      if(!driverName||/^\d+$/.test(driverName)) continue;
+      const finishPts=parseInt(cells[7]?.textContent.trim(),10)||0;
+      const stageBonus=parseInt(cells[8]?.textContent.trim(),10)||0;
+      driverMap[driverName]={pos,finishPts,stageBonus,pts:finishPts+stageBonus};
+      if(pos===1){winner=driverName;winnerPts=finishPts+stageBonus;}
+    }
+    if(!Object.keys(driverMap).length) throw new Error('No driver rows parsed from ESPN');
+    if(!winner) throw new Error('Could not identify race winner');
+
+    // Helper: match a player's pick against ESPN's driver names (handles abbreviations like "K. Larson")
+    function findDriver(pickName){
+      if(driverMap[pickName]) return driverMap[pickName];
+      const lower=pickName.toLowerCase();
+      const lastName=pickName.split(' ').pop().toLowerCase();
+      const firstInitial=pickName.charAt(0).toLowerCase();
+      const matchedKey=Object.keys(driverMap).find(k=>{
+        const kl=k.toLowerCase();
+        if(kl===lower) return true;
+        const kLast=k.split(' ').pop().toLowerCase();
+        const kFirst=k.charAt(0).toLowerCase();
+        return kLast===lastName && kFirst===firstInitial;
       });
+      return matchedKey?driverMap[matchedKey]:null;
     }
 
-    // Sort by running_position to get finish order
-    const sorted = [...vehicles].sort((a,b)=>(a.running_position||99)-(b.running_position||99));
-    // Build driver -> {pts, stageBonus, total} map
-    const driverMap = {};
-    sorted.forEach(v=>{
-      const name = v.driver?.full_name||'';
-      if(name){
-        const finishPts=nascarPtsForPos(v.running_position);
-        const stageBonus=stageBonusMap[name]||0;
-        driverMap[name]={pos:v.running_position, pts:finishPts+stageBonus, finishPts, stageBonus, status:v.status};
-      }
-    });
-
-    const winner = sorted[0]?.driver?.full_name||'';
-    const winnerPts = nascarPtsForPos(1);
-    // Pre-fill race name and track from schedule if available
-    const nextRace = state.nextRace||'';
-    const nextTrack = state.nextTrack||'';
+    // Step 6: Pre-fill race name and track from schedule if available
+    const nextRace=state.nextRace||'';
+    const nextTrack=state.nextTrack||trackName;
     if(nextRace && !document.getElementById('res-race-name').value)
       document.getElementById('res-race-name').value=nextRace;
     if(nextTrack && !document.getElementById('res-track-name').value)
       document.getElementById('res-track-name').value=nextTrack;
-    // Fill winner
+    // Step 7: Fill winner
     const winSelEl=document.getElementById('res-winner-driver');
     if(winSelEl){
-      [...winSelEl.options].forEach(o=>{if(o.value===winner)o.selected=true;});
+      // Try to match ESPN winner name against our driver list
+      const matchedOpt=[...winSelEl.options].find(o=>{
+        if(o.value===winner) return true;
+        const ol=o.value.toLowerCase();
+        const wl=winner.toLowerCase();
+        const wLast=winner.split(' ').pop().toLowerCase();
+        return ol===wl || ol.endsWith(' '+wLast);
+      });
+      if(matchedOpt) matchedOpt.selected=true;
     }
     const winPtsEl=document.getElementById('res-winner-pts');
     if(winPtsEl) winPtsEl.value=winnerPts;
-    // Switch to current mode and re-render first so inputs exist
+    // Step 8: Switch to current mode and re-render so player inputs exist
     setResultMode('current');
     renderResultsForm();
-    // Fill each player's points
-    let filled=0, missing=[];
+    // Step 9: Fill each player's points
+    let filled=0, missing=[], totalStageBonus=0;
     state.players.forEach(p=>{
       const pick=state.picks[p.name];
       if(!pick){missing.push(p.name+' (no pick)');return;}
-      const driverData=driverMap[pick];
+      const driverData=findDriver(pick);
       const pid=p.name.replace(/\s+/g,'_');
       const ptsEl=document.getElementById('rpts-'+pid);
       if(ptsEl&&driverData){
         ptsEl.value=driverData.pts;
-        // Show breakdown as tooltip if stage bonus applied
-        if(driverData.stageBonus) ptsEl.title=`${driverData.finishPts} finish + ${driverData.stageBonus} stage bonus`;
+        if(driverData.stageBonus){
+          ptsEl.title=driverData.finishPts+' finish + '+driverData.stageBonus+' stage bonus';
+          totalStageBonus+=driverData.stageBonus;
+        }
         filled++;
+      } else if(!driverData){
+        missing.push(p.name+' ('+pick+' not found)');
       }
-      else if(!driverData) missing.push(p.name+' ('+pick+' not found)');
     });
-    // Status message
-    const raceStatus = flagState===9?'✅ Race finished':'⚠️ Race may still be in progress';
-    const stageStatus = stageMatch
-      ? (totalStagesFound>0?` · 🏁 ${totalStagesFound} stage${totalStagesFound!==1?'s':''} · ${totalStageBonusPts} bonus pts applied`:'')
-      : ' · ⚠️ Stage points not matched (may still be loading)';
-    statusEl.style.background = flagState===9?'rgba(74,232,138,.1)':'rgba(232,200,74,.1)';
-    statusEl.style.color = flagState===9?'var(--success)':'var(--accent)';
-    statusEl.innerHTML = `${raceStatus} · ${runName} · Winner: ${esc(winner)} · ${filled}/${state.players.length} players filled${stageStatus}${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+missing.join(', ')+'</span>':''}`;
+    // Step 10: Status message
+    statusEl.style.background='rgba(74,232,138,.1)';
+    statusEl.style.color='var(--success)';
+    const stageStatus=totalStageBonus>0?` · 🏁 ${totalStageBonus} stage bonus pts applied`:'';
+    statusEl.innerHTML=`✅ ESPN · ${trackName||'Race '+raceId} · Winner: ${esc(winner)} · ${filled}/${state.players.length} players filled${stageStatus}${missing.length?'<br><span style="font-size:11px;opacity:.7">Missing: '+esc(missing.join(', '))+'</span>':''}`;
 
   } catch(e){
     statusEl.style.color='var(--danger)';
