@@ -1124,13 +1124,37 @@ async function fetchNascarResults(){
   statusEl.style.background='var(--surface2)';
   statusEl.style.color='var(--text2)';
   statusEl.textContent='Fetching results from ESPN...';
+
+  // Helper: try fetching a URL through several CORS proxies. Some proxies expect
+  // raw URLs, others want them URL-encoded — we try both and return the first
+  // response that's both 2xx and looks like real HTML (not a proxy error page).
+  async function fetchThroughProxy(targetUrl){
+    const encoded=encodeURIComponent(targetUrl);
+    const proxies=[
+      'https://api.allorigins.win/raw?url='+encoded,
+      'https://corsproxy.io/?url='+encoded,
+      'https://api.codetabs.com/v1/proxy?quest='+encoded,
+      'https://thingproxy.freeboard.io/fetch/'+targetUrl,
+      'https://cors-anywhere.herokuapp.com/'+targetUrl
+    ];
+    let lastErr='';
+    for(const p of proxies){
+      try{
+        const r=await fetch(p,{headers:{'X-Requested-With':'XMLHttpRequest'}});
+        if(!r.ok){lastErr=p.split('?')[0]+' → '+r.status;continue;}
+        const text=await r.text();
+        if(text.length<500){lastErr=p.split('?')[0]+' → empty';continue;}
+        // Sanity check: ESPN pages contain "ESPN" somewhere in the HTML
+        if(!/espn/i.test(text)){lastErr=p.split('?')[0]+' → no ESPN content';continue;}
+        return text;
+      }catch(e){lastErr=p.split('?')[0]+' → '+e.message;}
+    }
+    throw new Error('All proxies failed (last: '+lastErr+')');
+  }
+
   try{
     // Step 1: Find the latest race ID from the ESPN results index
-    const PROXY='https://corsproxy.io/?url=';
-    const indexResp=await fetch(PROXY+encodeURIComponent('https://www.espn.com/racing/results'));
-    if(!indexResp.ok) throw new Error('Could not load ESPN results index ('+indexResp.status+')');
-    const indexHtml=await indexResp.text();
-    // ESPN uses two URL patterns: /raceresults/_/series/sprint/raceId/12345 and ?raceId=12345&series=sprint
+    const indexHtml=await fetchThroughProxy('https://www.espn.com/racing/results');
     const idMatches=[...indexHtml.matchAll(/raceId[=\/](\d{10,14})/g)].map(m=>m[1]);
     if(!idMatches.length) throw new Error('Could not find any race IDs on ESPN');
     // Filter to only races whose date (first 8 chars of ID = YYYYMMDD) is on or before today
@@ -1141,9 +1165,7 @@ async function fetchNascarResults(){
 
     // Step 2: Fetch the race results page
     const raceUrl='https://www.espn.com/racing/raceresults?raceId='+raceId+'&series=sprint';
-    const resp=await fetch(PROXY+encodeURIComponent(raceUrl));
-    if(!resp.ok) throw new Error('Could not load race results ('+resp.status+')');
-    const html=await resp.text();
+    const html=await fetchThroughProxy(raceUrl);
     const doc=new DOMParser().parseFromString(html,'text/html');
 
     // Step 3: Extract race title / track name from the page
@@ -1183,7 +1205,6 @@ async function fetchNascarResults(){
       const pos=parseInt(posStr,10);
       if(!pos) continue;
       // Driver name is typically column 3 (after POS, ST, NO.)
-      // ESPN may render as "Kyle Larson" or with a link wrapper.
       const driverCell=cells[3];
       if(!driverCell) continue;
       const driverName=driverCell.textContent.trim().replace(/\s+/g,' ');
@@ -1196,7 +1217,7 @@ async function fetchNascarResults(){
     if(!Object.keys(driverMap).length) throw new Error('No driver rows parsed from ESPN');
     if(!winner) throw new Error('Could not identify race winner');
 
-    // Helper: match a player's pick against ESPN's driver names (handles abbreviations like "K. Larson")
+    // Helper: match a player's pick against ESPN's driver names
     function findDriver(pickName){
       if(driverMap[pickName]) return driverMap[pickName];
       const lower=pickName.toLowerCase();
@@ -1222,7 +1243,6 @@ async function fetchNascarResults(){
     // Step 7: Fill winner
     const winSelEl=document.getElementById('res-winner-driver');
     if(winSelEl){
-      // Try to match ESPN winner name against our driver list
       const matchedOpt=[...winSelEl.options].find(o=>{
         if(o.value===winner) return true;
         const ol=o.value.toLowerCase();
