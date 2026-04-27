@@ -1175,66 +1175,52 @@ async function fetchNascarResults(){
     const titleMatch=raceTitle.match(/(?:Cup Series at\s+|Results from\s+)([^|·]+?)(?:\s+Results|$)/i);
     if(titleMatch) trackName=titleMatch[1].trim();
 
-    // Step 4: Find the results table.
-    // ESPN's column layout has shifted across versions; we detect it by finding
-    // a table whose first column is a finishing position and whose later columns
-    // include numeric points (PTS) and stage bonus (BONUS).
+    // Step 4: Find the results table by parsing its header row.
+    // ESPN's columns are: POS | DRIVER | CAR | MANUFACTURER | LAPS | START | LED | PTS | BONUS | PENALTY
+    // We locate columns by header name so layout shifts don't break us.
     const tables=[...doc.querySelectorAll('table')];
-    let resultsTable=null, ptsCol=-1, bonusCol=-1, driverCol=-1;
-    // Common manufacturer/team words we want to exclude when finding the driver column
-    const NON_DRIVER=/^(chevrolet|ford|toyota|chevy|mfg|team|laps|status|running|out|accident|engine|crash)$/i;
+    let resultsTable=null, ptsCol=-1, bonusCol=-1, driverCol=-1, posCol=-1;
     for(const tbl of tables){
       const rows=tbl.querySelectorAll('tr');
       if(rows.length<5) continue;
-      // Try data rows 1-4 to detect column positions
-      for(let i=1;i<Math.min(rows.length,5);i++){
-        const cells=[...rows[i].querySelectorAll('td')].map(c=>c.textContent.trim());
-        if(cells.length<6) continue;
-        if(!/^\d+$/.test(cells[0])) continue; // first col must be position
-        // Find the rightmost two numeric columns (those are PTS and BONUS)
-        const numericCols=[];
-        for(let j=cells.length-1;j>0;j--){
-          if(/^\d+$/.test(cells[j])) numericCols.push(j);
-          if(numericCols.length>=2) break;
+      // Find a row that looks like a header (contains POS, DRIVER, PTS labels)
+      let headerRow=null, headerCells=null;
+      for(let i=0;i<Math.min(rows.length,3);i++){
+        const cells=[...rows[i].querySelectorAll('th,td')].map(c=>c.textContent.trim().toUpperCase());
+        if(cells.includes('POS') && cells.includes('DRIVER') && cells.includes('PTS')){
+          headerRow=rows[i]; headerCells=cells; break;
         }
-        if(numericCols.length<2) continue;
-        // Bonus is the last column, pts is the column before
-        const bCol=numericCols[0];
-        const pCol=numericCols[1];
-        // Find the driver column: a non-numeric, multi-word, non-manufacturer cell
-        let dCol=-1;
-        for(let j=1;j<cells.length;j++){
-          const v=cells[j];
-          if(/^\d+$/.test(v)) continue;
-          if(NON_DRIVER.test(v)) continue;
-          if(v.length<3) continue;
-          // Driver names usually have a space (first + last) or a period (initial)
-          if(/[a-z]\s[a-z]|\./i.test(v)){ dCol=j; break; }
-        }
-        if(dCol<0) continue;
-        resultsTable=tbl;ptsCol=pCol;bonusCol=bCol;driverCol=dCol;
-        break;
       }
-      if(resultsTable) break;
+      if(!headerRow) continue;
+      posCol=headerCells.indexOf('POS');
+      driverCol=headerCells.indexOf('DRIVER');
+      ptsCol=headerCells.indexOf('PTS');
+      bonusCol=headerCells.indexOf('BONUS');
+      if(posCol<0||driverCol<0||ptsCol<0) continue;
+      resultsTable=tbl;
+      break;
     }
-    if(!resultsTable) throw new Error('Could not parse results table — page format may have changed');
+    if(!resultsTable) throw new Error('Could not find results table — page format may have changed');
 
-    // Step 5: Build driver -> {pos, finishPts, stageBonus, pts} map
+    // Step 5: Build driver -> {pos, totalPts, stageBonus} map.
+    // ESPN's PTS column already includes the BONUS — we keep BONUS only for
+    // the tooltip breakdown ("X finish + Y stage bonus").
     const driverMap={};
     let winner='', winnerPts=0;
     const rows=resultsTable.querySelectorAll('tr');
     for(const row of rows){
       const cells=row.querySelectorAll('td');
-      if(cells.length<=Math.max(driverCol,ptsCol,bonusCol)) continue;
-      const posStr=cells[0].textContent.trim();
+      if(cells.length<=Math.max(driverCol,ptsCol,bonusCol,posCol)) continue;
+      const posStr=cells[posCol].textContent.trim();
       const pos=parseInt(posStr,10);
       if(!pos) continue;
       const driverName=cells[driverCol].textContent.trim().replace(/\s+/g,' ');
-      if(!driverName||/^\d+$/.test(driverName)||NON_DRIVER.test(driverName)) continue;
-      const finishPts=parseInt(cells[ptsCol]?.textContent.trim(),10)||0;
-      const stageBonus=parseInt(cells[bonusCol]?.textContent.trim(),10)||0;
-      driverMap[driverName]={pos,finishPts,stageBonus,pts:finishPts+stageBonus};
-      if(pos===1){winner=driverName;winnerPts=finishPts+stageBonus;}
+      if(!driverName||/^\d+$/.test(driverName)) continue;
+      const totalPts=parseInt(cells[ptsCol]?.textContent.trim(),10)||0;
+      const stageBonus=bonusCol>=0?(parseInt(cells[bonusCol]?.textContent.trim(),10)||0):0;
+      const finishPts=totalPts-stageBonus;
+      driverMap[driverName]={pos,finishPts,stageBonus,pts:totalPts};
+      if(pos===1){winner=driverName;winnerPts=totalPts;}
     }
     if(!Object.keys(driverMap).length) throw new Error('No driver rows parsed from ESPN');
     if(!winner) throw new Error('Could not identify race winner');
