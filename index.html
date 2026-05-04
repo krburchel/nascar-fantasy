@@ -1153,15 +1153,39 @@ async function fetchNascarResults(){
   }
 
   try{
-    // Step 1: Find the latest race ID from the ESPN results index
+    // Step 1: Determine which race we want results for.
+    // Strategy: if state.deadline gives us a race date, prefer ESPN race IDs
+    // whose YYYYMMDD prefix matches that date. Otherwise fall back to "most
+    // recent race on or before today".
+    let raceId=null, targetDate=null;
+    if(state.deadline){
+      const dl=new Date(state.deadline);
+      if(dl<new Date()){
+        targetDate=dl.toISOString().slice(0,10).replace(/-/g,'');
+      }
+    }
     const indexHtml=await fetchThroughProxy('https://www.espn.com/racing/results');
     const idMatches=[...indexHtml.matchAll(/raceId[=\/](\d{10,14})/g)].map(m=>m[1]);
     if(!idMatches.length) throw new Error('Could not find any race IDs on ESPN');
-    // Filter to only races whose date (first 8 chars of ID = YYYYMMDD) is on or before today
+    const uniqueIds=[...new Set(idMatches)];
     const today=new Date().toISOString().slice(0,10).replace(/-/g,'');
-    const candidates=[...new Set(idMatches)].filter(id=>id.slice(0,8)<=today).sort().reverse();
-    if(!candidates.length) throw new Error('No completed races found on ESPN');
-    const raceId=candidates[0];
+
+    if(targetDate){
+      // Exact date match first
+      raceId=uniqueIds.find(id=>id.slice(0,8)===targetDate);
+      // Within 2 days (race weekends may span Sat/Sun)
+      if(!raceId){
+        const tNum=parseInt(targetDate,10);
+        raceId=uniqueIds
+          .filter(id=>Math.abs(parseInt(id.slice(0,8),10)-tNum)<=2)
+          .sort()[0];
+      }
+    }
+    if(!raceId){
+      const candidates=uniqueIds.filter(id=>id.slice(0,8)<=today).sort().reverse();
+      if(!candidates.length) throw new Error('No completed races found on ESPN');
+      raceId=candidates[0];
+    }
 
     // Step 2: Fetch the race results page
     const raceUrl='https://www.espn.com/racing/raceresults?raceId='+raceId+'&series=sprint';
