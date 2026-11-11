@@ -7,6 +7,8 @@
 //   3. Once NASCAR lists a winner and post-race inspection is complete, scores
 //      every pick exactly like "Save & Post Results" in the Admin tab, then
 //      clears picks and advances the schedule.
+// It also keeps races added with "Import NASCAR schedule" up to date: start
+// times (picks deadlines), sponsor race names and TV networks.
 //
 // Usage:
 //   node scripts/post-results.mjs              post for real
@@ -102,6 +104,78 @@ async function getJson(url) {
   return r.json();
 }
 
+// A season's Cup races. The per-series file appears first (2027 had only that in Nov 2026).
+const raceLists = new Map();
+export async function raceList(year) {
+  if (raceLists.has(year)) return raceLists.get(year);
+  let list = null;
+  try { list = await getJson(`${FEED}/${year}/${CUP}/race_list_basic.json`); } catch {}
+  if (!Array.isArray(list)) list = (await getJson(`${FEED}/${year}/race_list_basic.json`))[`series_${CUP}`] || [];
+  raceLists.set(year, list);
+  return list;
+}
+
+/* ── Schedule details from NASCAR (same rules as Import NASCAR schedule in index.html) ── */
+export function cleanRaceName(n) {
+  return String(n || '').trim().replace(/\s+/g, ' ').replace(/^NSCAR\b/, 'NASCAR');
+}
+export function tvNetwork(tv) {
+  const t = String(tv || '').toUpperCase();
+  if (/PRIME/.test(t)) return 'Prime';
+  if (/TNT|TRUTV|MAX/.test(t)) return 'TNT';
+  if (/FS1/.test(t)) return 'FS1';
+  if (/FOX/.test(t)) return 'FOX';
+  if (/USA/.test(t)) return 'USA';
+  if (/NBC|PEACOCK/.test(t)) return 'NBC';
+  return '';
+}
+// Picks lock at the scheduled start. Until NASCAR sets a time (feed shows 00:00), lock at
+// noon ET on race day; no 2026 Cup race started before 1 PM ET.
+export function startLock(r) {
+  const times = [r.date_scheduled, r.race_date].filter(t => t && t.slice(11, 19) !== '00:00:00');
+  if (!times.length) return { deadline: easternToUtc((r.race_date || r.date_scheduled).slice(0, 10) + 'T12:00:00').toISOString(), timeTBA: true };
+  return { deadline: new Date(Math.min(...times.map(t => easternToUtc(t).getTime()))).toISOString(), timeTBA: false };
+}
+
+// Update imported races as NASCAR fills in start times, sponsor names and TV. Anything an
+// admin edited by hand (name/deadline/network no longer equal to the auto value) is left
+// alone, and a deadline is never moved once picks have locked.
+export function syncSchedule(state, raceById, now) {
+  const changes = [];
+  for (const e of state.schedule) {
+    const r = e.nascarRaceId && raceById.get(e.nascarRaceId);
+    if (!r) continue;
+    const name = cleanRaceName(r.race_name);
+    if (e.autoName && e.name === e.autoName && name && name !== e.name) {
+      changes.push(`${e.name} is now ${name}`);
+      e.name = e.autoName = name;
+    }
+    const lock = startLock(r);
+    if (e.autoDeadline && e.deadline === e.autoDeadline && new Date(e.deadline) > now &&
+        (lock.deadline !== e.deadline || !!e.timeTBA !== lock.timeTBA)) {
+      changes.push(`${e.name}: picks lock ${lock.deadline}${lock.timeTBA ? ' (time TBA)' : ''}`);
+      e.deadline = e.autoDeadline = lock.deadline;
+      e.timeTBA = lock.timeTBA;
+    }
+    const net = tvNetwork(r.television_broadcaster);
+    if (net && net !== e.network && (!e.network || e.network === e.autoNetwork)) {
+      changes.push(`${e.name}: on ${net}`);
+      e.network = e.autoNetwork = net;
+    }
+  }
+  if (changes.length) { sortSchedule(state); syncNextRace(state); }
+  return changes;
+}
+
+function sortSchedule(state) {
+  state.schedule.sort((a, b) => {
+    if (!a.deadline && !b.deadline) return 0;
+    if (!a.deadline) return 1;
+    if (!b.deadline) return -1;
+    return new Date(a.deadline) - new Date(b.deadline);
+  });
+}
+
 // Pick the NASCAR Cup race that the league's next scheduled race refers to.
 export function matchRace(raceList, sched) {
   const lock = new Date(sched.deadline).getTime();
@@ -151,19 +225,8 @@ function syncNextRace(state) {
   state.nextRaceType = next?.raceType || 'regular';
 }
 
-/* ── Main ── */
-export async function run({ dryRun = false, stateFile = null, now = new Date() } = {}) {
-  let state, updateTime = null;
-  if (stateFile) {
-    state = JSON.parse(readFileSync(stateFile, 'utf8'));
-    dryRun = true;
-  } else {
-    const doc = await getJson(`${DOC_URL}?key=${API_KEY}`);
-    state = decodeFields(doc.fields);
-    updateTime = doc.updateTime;
-  }
-  state.schedule ||= []; state.races ||= []; state.picks ||= {};
-
+// Post the next scheduled race if it's official. Mutates state when it posts.
+async function postNextRace(state, now) {
   const sched = state.schedule[0];
   if (!sched) return { status: 'idle', message: 'No race on the league schedule.' };
   if (!sched.deadline) return { status: 'idle', message: `${sched.name} has no picks deadline, so it can't be matched to a NASCAR race.` };
@@ -172,11 +235,18 @@ export async function run({ dryRun = false, stateFile = null, now = new Date() }
   if (hoursSinceLock < MIN_HOURS_AFTER_LOCK)
     return { status: 'idle', message: `Next race: ${sched.name}, picks lock ${sched.deadline}. Nothing to post yet.` };
 
-  const year = new Date(sched.deadline).getUTCFullYear();
-  const list = (await getJson(`${FEED}/${year}/race_list_basic.json`))[`series_${CUP}`] || [];
-  const m = matchRace(list, sched);
-  if (!m) return { status: 'warn', message: `No NASCAR Cup race within ${MATCH_WINDOW_DAYS} days of the ${sched.name} picks deadline (${sched.deadline}). Check the deadline in Admin.` };
-  const info = m.r;
+  const year = sched.nascarSeason || new Date(sched.deadline).getUTCFullYear();
+  const list = await raceList(year);
+  let info, start;
+  if (sched.nascarRaceId) {
+    info = list.find(r => r.race_id === sched.nascarRaceId);
+    if (!info) return { status: 'warn', message: `NASCAR race ${sched.nascarRaceId} (${sched.name}) isn't in the ${year} feed anymore.` };
+    start = easternToUtc(info.race_date || info.date_scheduled).getTime();
+  } else {
+    const m = matchRace(list, sched);
+    if (!m) return { status: 'warn', message: `No NASCAR Cup race within ${MATCH_WINDOW_DAYS} days of the ${sched.name} picks deadline (${sched.deadline}). Check the deadline in Admin.` };
+    info = m.r; start = m.start;
+  }
 
   if (state.races.some(r => r.nascarRaceId === info.race_id))
     return { status: 'warn', message: `${info.race_name} (${info.race_id}) is already posted, but it's still first on the schedule. Remove it from the schedule in Admin.` };
@@ -187,7 +257,7 @@ export async function run({ dryRun = false, stateFile = null, now = new Date() }
   const winner = results.find(r => r.finishing_position === 1);
   const finished = winner && info.winner_driver_id && info.winner_driver_id === winner.driver_id;
   if (!finished) return { status: 'idle', message: `${info.race_name}: waiting for NASCAR to post a winner.` };
-  const hoursSinceStart = (now - m.start) / 3600e3;
+  const hoursSinceStart = (now - start) / 3600e3;
   if (!race.inspection_complete && hoursSinceStart < INSPECTION_FALLBACK_HOURS)
     return { status: 'idle', message: `${info.race_name}: ${winner.driver_fullname} won; waiting for post-race inspection to finish.` };
 
@@ -212,13 +282,45 @@ export async function run({ dryRun = false, stateFile = null, now = new Date() }
 
   const summary = `${record.name}: ${record.winnerDriver} won. ` +
     entries.map(e => `${e.player} ${e.driver} ${e.pts}${e.won ? ' 🏆' : ''}`).join(' · ');
+  return { status: 'posted', message: summary, record, warnings };
+}
 
-  if (dryRun) return { status: 'dry-run', message: 'Would post → ' + summary, record, warnings, state };
+/* ── Main ── */
+const NEXT_FIELDS = ['schedule', 'nextRace', 'nextTrack', 'deadline', 'nextRaceType'];
+export async function run({ dryRun = false, stateFile = null, now = new Date() } = {}) {
+  let state, updateTime = null;
+  if (stateFile) {
+    state = JSON.parse(readFileSync(stateFile, 'utf8'));
+    dryRun = true;
+  } else {
+    const doc = await getJson(`${DOC_URL}?key=${API_KEY}`);
+    state = decodeFields(doc.fields);
+    updateTime = doc.updateTime;
+  }
+  state.schedule ||= []; state.races ||= []; state.picks ||= {};
 
-  const fields = ['races', 'picks', 'schedule', 'nextRace', 'nextTrack', 'deadline', 'nextRaceType'];
+  // 1. Keep imported races in step with NASCAR's schedule.
+  const fields = new Set();
+  const raceById = new Map();
+  for (const y of new Set(state.schedule.filter(e => e.nascarRaceId).map(e => e.nascarSeason || new Date(e.deadline).getUTCFullYear())))
+    for (const r of await raceList(y)) raceById.set(r.race_id, r);
+  const changes = syncSchedule(state, raceById, now);
+  if (changes.length) NEXT_FIELDS.forEach(f => fields.add(f));
+
+  // 2. Post the next race if it's official.
+  const post = await postNextRace(state, now);
+  if (post.status === 'posted') ['races', 'picks', ...NEXT_FIELDS].forEach(f => fields.add(f));
+
+  const lines = [];
+  if (changes.length) lines.push('Schedule updates from NASCAR: ' + changes.join('; '));
+  lines.push((post.status === 'posted' ? (dryRun ? 'Would post → ' : 'Posted → ') : '') + post.message);
+  const out = { status: post.status, message: lines.join('\n'), record: post.record, warnings: post.warnings || [], changes };
+  if (!fields.size) return out;
+  if (dryRun) return { ...out, status: post.status === 'posted' ? 'dry-run' : post.status, state };
+
   const params = new URLSearchParams({ key: API_KEY, 'currentDocument.updateTime': updateTime });
   fields.forEach(f => params.append('updateMask.fieldPaths', f));
-  const body = { fields: Object.fromEntries(fields.map(f => [f, encode(state[f])])) };
+  const body = { fields: Object.fromEntries([...fields].map(f => [f, encode(state[f])])) };
   const r = await fetch(`${DOC_URL}?${params}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -226,10 +328,10 @@ export async function run({ dryRun = false, stateFile = null, now = new Date() }
     const text = await r.text();
     // Someone saved in the app between our read and write; next run will retry with fresh data.
     if (r.status === 400 && /FAILED_PRECONDITION|precondition/i.test(text))
-      return { status: 'idle', message: 'League changed while posting; will retry next run.' };
+      return { status: 'idle', message: 'League changed while saving; will retry next run.' };
     throw new Error(`Firestore write failed: HTTP ${r.status} ${text.slice(0, 300)}`);
   }
-  return { status: 'posted', message: 'Posted → ' + summary, record, warnings };
+  return out;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

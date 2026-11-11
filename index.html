@@ -401,6 +401,8 @@ select option:disabled{color:var(--text3);}
     </div>
     <div class="card">
       <div class="card-title">Schedule</div>
+      <button id="import-sched-btn" class="btn btn-primary" onclick="importNascarSchedule()" style="margin-bottom:6px;">Import NASCAR schedule</button>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">Adds every points race, then keeps start times, race names and TV current as NASCAR announces them.</div>
       <div id="admin-schedule-list" style="margin-bottom:12px;"></div>
       <div style="background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;">
         <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text2);margin-bottom:10px;">Add Race</div>
@@ -897,7 +899,7 @@ function renderUpcomingSchedule(){
   list.innerHTML=upcoming.map((r,i)=>{
     const typeLabel={'regular':'Regular','postseason':'Post Season','final':'Final Race'}[r.raceType]||'Regular';
     const typeColor={'regular':'pill-muted','postseason':'pill-gold','final':'pill-danger'}[r.raceType]||'pill-muted';
-    const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
+    const dl=fmtLock(r);
     return`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}">
       <div style="min-width:0">
         <div style="font-size:14px;font-weight:600;">${esc(r.name)} <span class="pill ${typeColor}" style="font-size:9px;">${typeLabel}</span></div>
@@ -923,7 +925,8 @@ function renderCountdown(){
     h+=`<div class="cd-locked">LOCKED</div>`;
   } else {
     const dlLocal=dl.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-    h+=`<div class="countdown-digits" id="cd-digits">—</div><div style="font-size:11px;color:var(--text2);margin-top:8px">Locks ${dlLocal} (your time)</div>`;
+    const tba=state.schedule&&state.schedule[0]&&state.schedule[0].timeTBA;
+    h+=`<div class="countdown-digits" id="cd-digits">—</div><div style="font-size:11px;color:var(--text2);margin-top:8px">Locks ${dlLocal} (your time)${tba?' · NASCAR hasn\'t set the start time yet':''}</div>`;
   }
   if(noPick&&!isLocked)h+=`<div class="pill pill-danger" style="margin-top:10px;display:inline-block">No pick set yet</div>`;
   if('Notification' in window&&Notification.permission==='default')h+=`<div style="margin-top:10px"><button onclick="requestNotifyPermission()" style="font-size:12px;padding:5px 12px;border-radius:6px;background:none;border:1px solid var(--border2);color:var(--text2);cursor:pointer;">🔔 Enable deadline alerts</button></div>`;
@@ -1144,10 +1147,89 @@ function findDriverIn(list,name,nameOf){
   const loose=list.filter(x=>{const p=normDriver(nameOf(x)).split(' ');return w.length&&p[0]===w[0]&&p[p.length-1]===w[w.length-1];});
   return loose.length===1?loose[0]:null;
 }
+// A season's Cup races. The per-series file appears first (2027 had only that in Nov 2026).
 async function nascarRaceList(year){
-  const r=await fetch(`${NASCAR_FEED}/${year}/race_list_basic.json`);
-  if(!r.ok) return null;
-  return (await r.json()).series_1||[];
+  const r=await fetch(`${NASCAR_FEED}/${year}/1/race_list_basic.json`);
+  if(r.ok){const list=await r.json();if(Array.isArray(list))return list;}
+  const r2=await fetch(`${NASCAR_FEED}/${year}/race_list_basic.json`);
+  if(!r2.ok) return null;
+  return (await r2.json()).series_1||[];
+}
+/* Schedule details from NASCAR — same rules as syncSchedule in scripts/post-results.mjs */
+function cleanRaceName(n){return String(n||'').trim().replace(/\s+/g,' ').replace(/^NSCAR\b/,'NASCAR');}
+function tvNetwork(tv){
+  const t=String(tv||'').toUpperCase();
+  if(/PRIME/.test(t))return 'Prime';
+  if(/TNT|TRUTV|MAX/.test(t))return 'TNT';
+  if(/FS1/.test(t))return 'FS1';
+  if(/FOX/.test(t))return 'FOX';
+  if(/USA/.test(t))return 'USA';
+  if(/NBC|PEACOCK/.test(t))return 'NBC';
+  return '';
+}
+// Picks lock at the scheduled start. Until NASCAR sets a time (feed shows 00:00), lock at
+// noon ET on race day; no 2026 Cup race started before 1 PM ET.
+function startLock(r){
+  const times=[r.date_scheduled,r.race_date].filter(t=>t&&t.slice(11,19)!=='00:00:00');
+  if(!times.length) return{deadline:easternToUtc((r.race_date||r.date_scheduled).slice(0,10)+'T12:00:00').toISOString(),timeTBA:true};
+  return{deadline:new Date(Math.min(...times.map(t=>easternToUtc(t).getTime()))).toISOString(),timeTBA:false};
+}
+// "Sun, Feb 21, 12:00 PM", or "Sun, Feb 21 · time TBA" while NASCAR hasn't set a start time
+function fmtLock(r){
+  if(!r||!r.deadline) return '';
+  const d=new Date(r.deadline);
+  return r.timeTBA?d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})+' · time TBA'
+    :d.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+
+// Admin → Import NASCAR schedule: adds every points race of the season (exhibitions skipped).
+// Races already on the schedule are linked rather than duplicated. The auto-post job then keeps
+// start times, sponsor names and TV current, without touching anything edited by hand.
+async function importNascarSchedule(){
+  const btn=document.getElementById('import-sched-btn');
+  const label=btn.textContent;
+  btn.disabled=true;btn.textContent='Loading NASCAR schedule…';
+  try{
+    const now=new Date();
+    const pointsRaces=async y=>((await nascarRaceList(y))||[]).filter(r=>r.race_type_id===1)
+      .sort((a,b)=>easternToUtc(a.race_date||a.date_scheduled)-easternToUtc(b.race_date||b.date_scheduled));
+    // This season if it still has races to run, otherwise next season
+    let year=now.getFullYear(), races=await pointsRaces(year);
+    if(!races.some(r=>new Date(startLock(r).deadline)>now)){year++;races=await pointsRaces(year);}
+    if(!races.length) throw new Error(`NASCAR hasn't published the ${year} schedule yet`);
+    const finalId=races[races.length-1].race_id;
+    if(!state.schedule) state.schedule=[];
+    const add=[], link=[];
+    races.filter(r=>new Date(startLock(r).deadline)>now).forEach(r=>{
+      if(state.schedule.some(e=>e.nascarRaceId===r.race_id)) return;
+      // A race added by hand: same track, deadline within 3 days → link it, keep its details
+      const lock=startLock(r), t=normDriver(r.track_name);
+      const manual=state.schedule.find(e=>!e.nascarRaceId&&e.deadline&&Math.abs(new Date(e.deadline)-new Date(lock.deadline))<=3*864e5&&
+        (normDriver(e.track).includes(t)||t.includes(normDriver(e.track))));
+      if(manual){link.push([manual,r]);return;}
+      const name=cleanRaceName(r.race_name), network=tvNetwork(r.television_broadcaster);
+      add.push({name,track:r.track_name,deadline:lock.deadline,timeTBA:lock.timeTBA,
+        raceType:r.race_id===finalId?'final':(r.playoff_round>0?'postseason':'regular'),network,
+        nascarRaceId:r.race_id,nascarSeason:year,autoName:name,autoDeadline:lock.deadline,autoNetwork:network});
+    });
+    if(!add.length&&!link.length){toast(`Every ${year} race is already on the schedule`);return;}
+    const tba=add.filter(e=>e.timeTBA).length;
+    const msg=`Add ${add.length} races from NASCAR's ${year} Cup schedule`+(link.length?` and link ${link.length} you already added`:'')+'?'+
+      (tba?`\n\nNASCAR hasn't set start times${tba<add.length?` for ${tba} of them`:''} yet, so picks lock at noon ET on race day for now.`:'')+
+      '\n\nStart times, race names and TV networks will update on their own as NASCAR announces them. Anything you edit by hand stays as you set it.';
+    if(!confirm(msg)) return;
+    link.forEach(([e,r])=>{e.nascarRaceId=r.race_id;e.nascarSeason=year;});
+    state.schedule.push(...add);
+    sortSchedule();
+    syncNextRaceFromSchedule();
+    saveState();
+    toast(`Added ${add.length} races to the schedule`);
+    renderAdmin();
+  }catch(e){
+    toast('Import failed: '+e.message);
+  }finally{
+    btn.disabled=false;btn.textContent=label;
+  }
 }
 
 async function fetchNascarResults(){
@@ -1169,7 +1251,11 @@ async function fetchNascarResults(){
     if(!list) throw new Error(`NASCAR hasn't published the ${year} schedule yet`);
 
     let info=null;
-    if(useLock){
+    const linkedId=state.schedule?.[0]?.nascarRaceId;
+    if(useLock&&linkedId){
+      info=list.find(r=>r.race_id===linkedId)||null;
+      if(!info) throw new Error(`NASCAR race ${linkedId} (${state.nextRace}) isn't in the ${year} feed`);
+    } else if(useLock){
       const track=normDriver(state.nextTrack);
       info=list.map(r=>{
         const days=Math.abs(easternToUtc(r.race_date||r.date_scheduled)-lock)/864e5;
@@ -2461,7 +2547,7 @@ function renderAdminSchedule(){
     return;
   }
   el.innerHTML=state.schedule.map((r,i)=>{
-    const dl=r.deadline?new Date(r.deadline).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'No deadline';
+    const dl=fmtLock(r)||'No deadline';
     let dlLocal='';
     if(r.deadline){const d=new Date(r.deadline);const pad=n=>String(n).padStart(2,'0');dlLocal=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;}
     const typeLabel={'regular':'Reg','postseason':'Post','final':'Final'}[r.raceType]||'Reg';
@@ -2527,7 +2613,12 @@ function saveScheduleEdit(i){
   const raceType=document.getElementById('sched-type-'+i)?.value||'regular';
   const network=document.getElementById('sched-network-'+i)?.value||'';
   if(!name){toast('Race name required');return;}
-  state.schedule[i]={name,track:track||'',deadline:rawDl?new Date(rawDl).toISOString():'',raceType,network};
+  const prev=state.schedule[i];
+  const deadline=rawDl?new Date(rawDl).toISOString():'';
+  // Keep the NASCAR link fields (nascarRaceId, autoName …) so the schedule keeps updating;
+  // fields that now differ from their auto value are treated as hand-edited and left alone.
+  state.schedule[i]={...prev,name,track:track||'',deadline,raceType,network};
+  if(deadline!==prev.deadline) state.schedule[i].timeTBA=false;
   sortSchedule();
   syncNextRaceFromSchedule();
   saveState();
@@ -2566,7 +2657,7 @@ window.doLogin=doLogin; window.doLogout=doLogout;
 window.showTab=showTab; window.savePick=savePick;
 window.setResultMode=setResultMode; window.updatePreview=updatePreview;
 window.toggleWin=toggleWin; window.togglePsWin=togglePsWin;
-window.submitResults=submitResults; window.fetchNascarResults=fetchNascarResults; window.checkStagePoints=checkStagePoints; window.deleteRace=deleteRace;
+window.submitResults=submitResults; window.fetchNascarResults=fetchNascarResults; window.importNascarSchedule=importNascarSchedule; window.checkStagePoints=checkStagePoints; window.deleteRace=deleteRace;
 window.toggleSeason=toggleSeason; window.showRaceDetail=showRaceDetail;
 window.deleteSeason=deleteSeason; window.editSeason=editSeason; window.cancelEditSeason=cancelEditSeason; window.handleCsvImport=handleCsvImport; window.cancelCsvImport=cancelCsvImport; window.confirmCsvImport=confirmCsvImport; window.startCsvImport=startCsvImport; window.cancelCsvImport=cancelCsvImport; window.importCsv=importCsv; window.saveEditSeason=saveEditSeason; window.esAddRace=esAddRace; window.deleteSeasonRace=deleteSeasonRace; window.startPastSeason=startPastSeason;
 window.cancelPastSeason=cancelPastSeason; window.addPastRace=addPastRace; window.addPsStandingRow=addPsStandingRow;
