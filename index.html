@@ -343,6 +343,7 @@ select option:disabled{color:var(--text3);}
           <button class="mode-btn" onclick="fetchNascarResults()" style="background:var(--accent);color:#0a0a0a;font-weight:700;">🏁 Fetch Results</button>
         </div>
       </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px;">⚡ Results post on their own 1–3 hours after each race, once NASCAR makes them official. Use this form only if that fails.</div>
       <div id="fetch-status" style="display:none;font-size:13px;padding:8px 12px;border-radius:var(--r-sm);margin-bottom:10px;"></div>
       <div class="input-group" style="margin-bottom:10px">
         <label>Race Name</label>
@@ -1327,7 +1328,7 @@ function renderResults(){
     const idx=state.races.length-1-i;
     const typeLabel={'postseason':'Post Season','final':'Final Race','regular':''}[r.raceType||'regular']||'';
     const typeColor={'postseason':'pill-gold','final':'pill-danger','regular':''}[r.raceType||'regular']||'';
-    const tag=(r.backfill?' <span class="pill pill-info" style="font-size:9px">past</span>':'')+(typeLabel?` <span class="pill ${typeColor}" style="font-size:9px">${typeLabel}</span>`:'');
+    const tag=(r.backfill?' <span class="pill pill-info" style="font-size:9px">past</span>':'')+(r.auto?' <span class="pill pill-muted" style="font-size:9px">auto</span>':'')+(typeLabel?` <span class="pill ${typeColor}" style="font-size:9px">${typeLabel}</span>`:'');
     const entryRows=[...r.entries].sort((a,b)=>b.pts-a.pts).map(e=>{
       const pid='edit_'+idx+'_'+e.player.replace(/\s+/g,'_');
       const rawPts=e.won?e.pts-10:e.pts;
@@ -1414,6 +1415,9 @@ function submitResults(){
   const winnerPts=parseInt(document.getElementById('res-winner-pts')?.value)||0;
   if(!name){toast('Enter a race name');return;}
   const isBackfill=resultMode==='backfill';
+  // Results post automatically; if the next race hasn't locked yet, the last one is probably already in.
+  if(!isBackfill&&state.deadline&&new Date(state.deadline)>new Date()&&
+     !confirm(`Picks for ${state.nextRace||'the next race'} haven't locked yet, so the last race was probably already posted automatically. Post this anyway?`))return;
   const entries=state.players.map(p=>{
     const pid=p.name.replace(/\s+/g,'_');
     const pts=parseInt(document.getElementById('rpts-'+pid)?.value)||0;

@@ -1,0 +1,43 @@
+name: Post race results
+
+# Checks every 20 minutes. Until the next race's picks lock, each run just
+# reads the league and stops. After the race, it posts once NASCAR lists a
+# winner and finishes post-race inspection (usually 1–3 hours after the flag).
+on:
+  schedule:
+    - cron: '7,27,47 * * * *'
+    - cron: '0 12 * * 1'   # weekly keepalive (see last step)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: show what would post, change nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: write   # only for the keepalive step
+
+concurrency:
+  group: post-results
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Post results if the race is official
+        run: node scripts/post-results.mjs
+        env:
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+      # GitHub pauses scheduled workflows after 60 days without a commit, which
+      # would switch this off over the winter. Re-enabling it weekly resets that.
+      - name: Keep the schedule alive
+        if: always() && github.event.schedule == '0 12 * * 1'
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/post-results.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
